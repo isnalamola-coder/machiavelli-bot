@@ -8,6 +8,7 @@ from datetime import datetime
 
 from machiavelli.game import Game, Player, Command, DuplicatedGameException, GameNotFoundException
 from machiavelli.scenario import Scenario
+from machiavelli.tables import GameTables
 
 # Estructura del documento (para orientarme)
 # 1. Grupos de comandos
@@ -374,7 +375,8 @@ async def run_game(interaction: discord.Interaction):
     except GameNotFoundException:
         await interaction.followup.send("**Error:** No hay ninguna partida activa en este canal para poder ejecutarla.")
     except Exception as e:
-        await interaction.followup.send(f"**Error inesperado al ejecutar el turno:** `{type(e).__name__}: {e}`.")
+        error_detallado = format_error_with_location(e)
+        await interaction.followup.send(f"**Error inesperado al ejecutar el turno:** `{error_detallado}`.")
 
 
 
@@ -426,7 +428,7 @@ async def game_report(interaction: discord.Interaction):
             # Comprobamos si añadir esta línea supera el límite de Discord (dejamos margen de seguridad)
             if len(current_message) + len(l) + 1 > 1950:
                 # Enviamos lo que llevamos acumulado hasta ahora
-                await interaction.followup.send(current_message)
+                await interaction.followup.send(current_message, ephemeral=True)
                 # Empezamos el nuevo bloque con la línea actual
                 current_message = l
             else:
@@ -503,6 +505,26 @@ async def cmdlist(interaction: discord.Interaction):
 
 # first, autocomplete
 
+def _resolve_player(
+    game: Game, interaction: discord.Interaction
+) -> Player | None:
+    """Devuelve el Player correspondiente según si se especificó 'power' (admin) o por el ID de Discord."""
+    selected_power = getattr(interaction.namespace, "power", None)
+
+    # Modo administrador
+    if selected_power:
+        # Buscamos por el código de la potencia
+        return next(
+            (p for p in game.players if p.power == selected_power), None
+        )
+
+    # Modo Jugador. Buscamos por la cuenta de Discord
+    return next(
+        (p for p in game.players if p.discord_id == interaction.user.id), None
+    )
+
+
+
 async def cmd_actor_autocomplete(
     interaction: discord.Interaction, 
     current: str
@@ -511,7 +533,7 @@ async def cmd_actor_autocomplete(
     try:
         with sqlite3.connect(game_group.db_path) as conn:
             game = Game.load_game(conn, channel_id=interaction.channel_id)
-            player = next((p for p in game.players if p.discord_id == interaction.user.id), None)
+            player = _resolve_player(game, interaction)
             
             if not player:
                 return []
@@ -543,7 +565,7 @@ async def cmd_command_autocomplete(
     try:
         with sqlite3.connect(game_group.db_path) as conn:
             game = Game.load_game(conn, channel_id=interaction.channel_id)
-            player = next((p for p in game.players if p.discord_id == interaction.user.id), None)
+            player = _resolve_player(game, interaction)
 
             # Comandos disponibles
             commands = player.cmd_available_commands(actor)
@@ -572,7 +594,7 @@ async def cmd_target_autocomplete(
     try:
         with sqlite3.connect(game_group.db_path) as conn:
             game = Game.load_game(conn, channel_id=interaction.channel_id)
-            player = next((p for p in game.players if p.discord_id == interaction.user.id), None)
+            player = _resolve_player(game, interaction)
 
             # Targets disponibles
             targets = player.cmd_available_targets(actor, command)
@@ -654,6 +676,115 @@ async def cmd(
         report = "\n".join(lines)
 
         await interaction.followup.send(report, ephemeral=True)
+
+    except GameNotFoundException:
+        await interaction.followup.send(
+            "**Error:** No hay ninguna partida activa en este canal.",
+            ephemeral=True
+        )
+    except Exception as e:
+        error_detallado = format_error_with_location(e)
+        await interaction.followup.send(
+            f"**Error inesperado:** {error_detallado}",
+            ephemeral=True
+        )
+
+
+# ==============================================================================
+# COMANDO /shar cmd_user
+# ==============================================================================
+async def cmd_power_autocomplete(
+    interaction: discord.Interaction, 
+    current: str
+) -> list[app_commands.Choice[str]]:
+    """Sugiere las potencias/jugadores presentes en la partida actual."""
+    try:
+        with sqlite3.connect(admin_group.db_path) as conn:
+            game = Game.load_game(conn, channel_id=interaction.channel_id)
+            
+            # Obtenemos los códigos de las potencias en juego
+            active_powers = {p.power for p in game.players}
+            
+            choices = []
+            for code, name in GameTables.powers.items():
+                if code in active_powers:
+                    label = f"{name}"
+                    choices.append(app_commands.Choice(name=label, value=code))
+                        
+            return choices[:25]
+    except Exception:
+        return []
+
+@admin_group.command(name="cmd_user", description="Registra una orden en nombre de un jugador")
+@app_commands.describe(
+    power="Código de la potencia/jugador a quien pertenece la orden",
+    actor="Unidad o recurso que ejecutará la acción",
+    command="Acción u orden a realizar",
+    target="Objetivo de la orden (Provincia, ciudad, unidad, facción, etc)"
+)
+@app_commands.autocomplete(
+    power=cmd_power_autocomplete,
+    actor=cmd_actor_autocomplete,
+    command=cmd_command_autocomplete,
+    target=cmd_target_autocomplete
+)
+async def cmd_user(
+    interaction: discord.Interaction,
+    power: str,
+    actor: str,
+    command: str,
+    target: str = None
+):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        with sqlite3.connect(admin_group.db_path) as conn:
+            game = Game.load_game(conn, channel_id=interaction.channel_id)
+            # Buscamos al jugador por su código de potencia en lugar del discord_id
+            player = next((p for p in game.players if p.power == power), None)
+
+            if not player:
+                await interaction.followup.send(
+                    f"**Error:** No se encontró a la potencia `{power}` en esta partida.",
+                    ephemeral=True
+                )
+                return
+            
+            valid_actor = [code for code, _ in player.cmd_available_actors()]
+            if actor not in valid_actor:
+                await interaction.followup.send(
+                    f"**Error:** `{actor}` no es un actor válido.",
+                    ephemeral=True,
+                )
+                return
+
+            valid_command = [code for code, _ in player.cmd_available_commands(actor)]
+            if command not in valid_command:
+                await interaction.followup.send(
+                    f"**Error:** `{command}` no es una orden válida.",
+                    ephemeral=True,
+                )
+                return
+
+            valid_target = [code for code, _ in player.cmd_available_targets(actor, command)]
+            if valid_target and valid_target[0] != '' and target not in valid_target:
+                await interaction.followup.send(
+                    f"**Error:** `{target}` no es un objetivo válido.",
+                    ephemeral=True,
+                )
+                return
+
+            cmd_obj = Command(game, player, actor, command, target)
+            lines = player.cmd_add_command(cmd_obj)
+
+            player.save(conn)
+
+        report = "\n".join(lines)
+
+        await interaction.followup.send(
+            f"{report}", 
+            ephemeral=True
+        )
 
     except GameNotFoundException:
         await interaction.followup.send(

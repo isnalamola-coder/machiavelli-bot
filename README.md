@@ -52,33 +52,39 @@ Sincroniza los comandos disponibles. Ejecutar cuando se deban registrar nuevos c
 ### `/dice` (todos)
 
 *Versión 0.0.1*
+**Deprecated**
 Lanza 1 o 2 dados de seis.
 
 ### `/send` (todos)
 
 *Versión 0.0.1*
+**Deprecated**
 Envía un mensaje al bot. El mensaje puede ser de texto o un archivo adjunto. Se utilizará para enviar las órdenes.
 
 ### `/list` (Juez)
 
 *Versión 0.0.1*
+**Deprecated**
 Muestra un listado de los jugadores que han mandado órdenes al bot. No se muestra el contenido de esas órdenes, para
 ello debe utilizarse `/view`.
 
 ### `/view` (Juez)
 
 *Versión 0.0.1*
+**Deprecated**
 Muestra el contenido de los mensajes enviados por los jugadores. En el caso de los archivos adjuntos, lo que se muestra
 ese el identificador del archivo para descargarlo mediante `/file`.
 
 ### `/file` (Juez)
 
 *Versión 0.0.1*
+**Deprecated**
 Descarga un archivo enviado por un jugador. El identificador del archivo es el que se muestra en `/view`.
 
 ### `/clean` (Juez)
 
 *Versión 0.0.1*
+**Deprecated**
 Elimina todos los mensajes almacenados en el bot.
 
 ### `/mach` (todos)
@@ -96,6 +102,16 @@ Muestra el estado de la partida.
 
 *Versión 0.2.0*
 Muestra el último informe de la partida.
+
+#### `/mach cmdlist`
+
+*Versión 0.2.0*
+Muestra las órdenes enviadas hasta el momento por el jugador.
+
+#### `/mach cmd`
+
+*Versión 0.2.0*
+Añade una orden nueva al turno actual.
 
 ### `/shar` (Juez)
 
@@ -128,17 +144,22 @@ Añade un jugador a la partida.
 *Versión 0.2.0*
 Ejecuta las órdenes de la partida y genera el informe para el siguiente turno.
 
+#### `/shar cmd_user`
+
+*Versión 0.3.0*
+Introduce las órdenes para un jugador determinado. Útil para los caso en los que el jugador ha mando sus órdenes por
+
 ## Futuras versiones
 
 Se prevén las siguientes versiones
 
-### Versión 0.2.0
+### Versión 0.3.0
 
-- [X] Los grupos de comandos ahora se llaman `mach` para los comandos de usuario, y `shar` para los de administración.
-- [X] El comando `/mach game_report` ahora manda un mensaje privado (ephemeral) para no saturar el canal.
-- [X] Crear nuevos comandos para introducir las órdenes de forma interactiva
-  - [X] Crear nuevo comando `/mach cmdlist` para mostrar los comandos que tenemos actualmente escritos.
-  - [X] Crear nuevo comando `/mach cmd` para enviar órdenes. Parcial, solo soporta las órdenes de mantenimiento.
+- [X] Extender la funcionalidad de `/shar run_game` para ejecutar las órdenes del turno (fase de matenimiento solo).
+- [X] Crear un numevo comando `/shar cmd_user` para añadir órdenes de un jugador determinado.
+- [X] No se escriben órdenes por defecto al finalizar un turno, sino que se asumen en el siguiente.
+- [X] `/mach game_status` ahora da información sobre los turnos enviados.
+- [X] Mejorar el formato de `/mach game_report`.
 
 ### Desarrollos futuros
 
@@ -150,9 +171,17 @@ Cambios que afectan a los comandos del bot. Los cambios se irán incorporando a 
 ## Histórico de versiones
 
 - Versión 0.0.1:
-  Primera versión, incluye comandos para enviar las órdenes como fichero adjunto, para ver quién los ha mandado y para descargarlos. Este primer bot no tiene ninguna lógica relacionada con el juego, solo es un "almacenador" de mensajes.
-- Versión 0.1.0: Primer bot que tiene la lógica del juego. Incorpora sus tablas; las potencias, los jugadores, la información de la situación del tablero y la ejecución y reporte del primerísimo turno, el inicio de Primavera (Hambre e Ingresos).
+  Primera versión, incluye comandos para enviar las órdenes como fichero adjunto, para ver quién los ha mandado y para
+  descargarlos. Este primer bot no tiene ninguna lógica relacionada con el juego, solo es un "almacenador" de mensajes.
+- Versión 0.1.0: Primer bot que tiene la lógica del juego. Incorpora sus tablas; las potencias, los jugadores, la
+  información de la situación del tablero y la ejecución y reporte del primerísimo turno, el inicio de Primavera
+  (Hambre e Ingresos).
 
-  Estos comandos (bajo el grupo `/sharcashvelli` y `/sharcashvelli_admin`) conviven con los de la *versión 0.0.1* ya que no tienen forma de permitir el envío de órdenes de juego, que todavía deben enviarse con `!send`.
-
+  Estos comandos (bajo el grupo `/sharcashvelli` y `/sharcashvelli_admin`) conviven con los de la *versión 0.0.1* ya
+  que no tienen forma de permitir el envío de órdenes de juego, que todavía deben enviarse con `!send`.
 - Versión 0.1.1: Se añade información sobre los asedios.
+- Versión 0.2.1: Se renombran los grupos `/sharcashvelli` y `/sharcashvelli_admin` a `/mach` y `/shar` respectivamente;
+  se añaden dos nuevos comandos `/mach cmd` y `/mach cmdlist`; el comando `/mach game_report` ahora envía un mensaje
+  privado.
+- Versión 0.3.0: Se ejecutan las órdenes del turno (fase de mantenimiento solo). nuevo comando `/shar cmd_user` para
+  introducir en el bot las órdenes de un jugador que las haya mandado usando `/send`.
