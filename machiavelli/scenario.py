@@ -100,7 +100,7 @@ class Scenario:
     rules: Rules = field(default_factory=Rules)
     home_countries: list[HomeCountry] = field(default_factory=list)
     powers: list[Power] = field(default_factory=list)
-    excluded_locations: list[str] = field(default=list)
+    excluded_locations: list[str] = field(default_factory=list)
     variable_income_home_countries: list[str] = field(default_factory=list)
     variable_income_provinces: list[str] = field(default_factory=list)
 

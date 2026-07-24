@@ -40,7 +40,7 @@ COMMANDS_CHANNEL=id_del_canal
 
 ## Versión
 
-La versión actual de desarrollo es la 0.1.1. La versión actual de producción es la 0.1.0.
+La versión actual de desarrollo es la 0.3.0. La versión actual de producción es la 0.3.0.
 
 ## Comandos disponibles
 
@@ -48,12 +48,6 @@ La versión actual de desarrollo es la 0.1.1. La versión actual de producción 
 
 *Versión 0.0.1*
 Sincroniza los comandos disponibles. Ejecutar cuando se deban registrar nuevos comandos de slash.
-
-### `/dice` (todos)
-
-*Versión 0.0.1*
-**Deprecated**
-Lanza 1 o 2 dados de seis.
 
 ### `/send` (todos)
 
@@ -74,18 +68,6 @@ ello debe utilizarse `/view`.
 **Deprecated**
 Muestra el contenido de los mensajes enviados por los jugadores. En el caso de los archivos adjuntos, lo que se muestra
 ese el identificador del archivo para descargarlo mediante `/file`.
-
-### `/file` (Juez)
-
-*Versión 0.0.1*
-**Deprecated**
-Descarga un archivo enviado por un jugador. El identificador del archivo es el que se muestra en `/view`.
-
-### `/clean` (Juez)
-
-*Versión 0.0.1*
-**Deprecated**
-Elimina todos los mensajes almacenados en el bot.
 
 ### `/mach` (todos)
 
@@ -147,19 +129,17 @@ Ejecuta las órdenes de la partida y genera el informe para el siguiente turno.
 #### `/shar cmd_user`
 
 *Versión 0.3.0*
-Introduce las órdenes para un jugador determinado. Útil para los caso en los que el jugador ha mando sus órdenes por
+Introduce las órdenes para un jugador determinado. Útil para los caso en los que el jugador ha mandado sus órdenes
+por `/send`
 
 ## Futuras versiones
 
 Se prevén las siguientes versiones
 
-### Versión 0.3.0
+### Versión 0.4.0
 
-- [X] Extender la funcionalidad de `/shar run_game` para ejecutar las órdenes del turno (fase de matenimiento solo).
-- [X] Crear un numevo comando `/shar cmd_user` para añadir órdenes de un jugador determinado.
-- [X] No se escriben órdenes por defecto al finalizar un turno, sino que se asumen en el siguiente.
-- [X] `/mach game_status` ahora da información sobre los turnos enviados.
-- [X] Mejorar el formato de `/mach game_report`.
+- [X] Eliminar los comandos `/dice`, `/file` y `/clean`.
+- [ ] Expandir `/mach cmd`, `/mach cmdlist` y `/shar cmd_user` para tratar las órdenes de una campaña.
 
 ### Desarrollos futuros
 
@@ -184,4 +164,6 @@ Cambios que afectan a los comandos del bot. Los cambios se irán incorporando a 
   se añaden dos nuevos comandos `/mach cmd` y `/mach cmdlist`; el comando `/mach game_report` ahora envía un mensaje
   privado.
 - Versión 0.3.0: Se ejecutan las órdenes del turno (fase de mantenimiento solo). nuevo comando `/shar cmd_user` para
-  introducir en el bot las órdenes de un jugador que las haya mandado usando `/send`.
+  introducir en el bot las órdenes de un jugador que las haya mandado usando `/send`. Se ha mejorado el formato de
+  `/mach game_report` y de `/mach game_status`.
+- Versión 0.3.1: Corrección de algunos bugs.

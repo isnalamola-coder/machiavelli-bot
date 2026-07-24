@@ -54,7 +54,7 @@ game_group.db_path = DB_PATH
 admin_group.db_path = DB_PATH
 
 
-def init_game_commands(db_path: str) -> app_commands.Group:
+def init_game_commands(db_path: str) -> tuple[app_commands.Group, app_commands.Group]:
     """Configura dinámicamente la ruta de la BBDD en el grupo de comandos y lo devuelve."""
     game_group.db_path = db_path
     admin_group.db_path = db_path
@@ -110,7 +110,7 @@ async def add_player(interaction: discord.Interaction, discord_player: discord.M
                 return
             
             # Crea el Player usando el nombre como player_id y el usuario como discord_id
-            new_player = Player(player_id=name, discord_id=discord_player.id)
+            new_player = Player(game=game, player_id=name, discord_id=discord_player.id)
             
             # Lo añade a la lista de la partida en memoria
             game.players.append(new_player)

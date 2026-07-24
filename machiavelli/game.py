@@ -136,7 +136,7 @@ class Command:
                 else:
                     # Campaign
                     report.append(GameTables.military_orders[self.command]["text"])
-                    target_type = GameTables.maintenance_orders[self.command]["target_type"]
+                    target_type = GameTables.military_orders[self.command]["target_type"]
             elif actor_type == "E":
                 report.append(self.command)
             
@@ -153,13 +153,13 @@ class Command:
                     army_ext = self.target.split()
                     report.append(GameTables.actors[army_ext[0]])
                     report.append(provinces[army_ext[1]].name)
-                    if len(army_ext > 2):
+                    if len(army_ext) > 2:
                         report.append(GameTables.powers[army_ext[2]])
                 elif target_type == "location":
                     report.append(locations[self.target].name)
                 elif target_type == "location_ext":
                     location_ext = self.target.split()
-                    report.append(locations[self.location_ext[0]].name)
+                    report.append(locations[location_ext[0]].name)
                     if len(location_ext > 1):
                         report.append(GameTables.powers[location_ext[1]])
                 elif target_type == "province":
@@ -764,7 +764,7 @@ class Game:
         
         if message:
             report.append(f"No se pudo iniciar la partida: {message}")
-            return report
+            raise FailedToStartError(message=message)
         
         # Ahora la podemos comenzar
         try:
@@ -1128,14 +1128,14 @@ class Game:
                     else:
                         self.turn_events.append(f"- `{cmd}:` No existe el ejército.")
                 elif unit_type == "F":
-                    if unit_id in player.armies:
+                    if unit_id in player.fleets:
                         player.fleets.remove(unit_id)
                         self.turn_events.append(f"- `{cmd}:` Flota disuelta.")
                         disbanded.append(unit_id)
                     else:
                         self.turn_events.append(f"- `{cmd}:` No existe la flota.")
                 elif unit_type == "G":
-                    if unit_id in player.armies:
+                    if unit_id in player.garrisons:
                         player.garrisons.remove(unit_id)
                         self.turn_events.append(f"- `{cmd}:` Guarnición disuelta.")
                         disbanded.append(unit_id)
@@ -1294,7 +1294,7 @@ class Game:
             if len(names) > 1:
                 garrisons = " y ".join([", ".join(names[0:-1]), names[-1]])
             else:
-                garrisons = ass_names[0]
+                garrisons = names[0]
             report.append(f"🛡️ **Guarniciones independientes:** {garrisons}")
         
         for p in self.players:
