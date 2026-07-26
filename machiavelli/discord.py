@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from datetime import datetime
 
-from machiavelli.game import Game, Player, Command, DuplicatedGameException, GameNotFoundException
+from machiavelli.game import Game, Player, Command, DuplicatedGameException, GameNotFoundException, TooManyExpenses
 from machiavelli.scenario import Scenario
 from machiavelli.tables import GameTables
 
@@ -62,7 +62,6 @@ def init_game_commands(db_path: str) -> tuple[app_commands.Group, app_commands.G
 
 
 # Comandos administrativos
-
 @admin_group.command(
     name="create", description="Crea una nueva partida en este canal")
 @app_commands.describe(name="Nombre de la partida")
@@ -523,8 +522,6 @@ def _resolve_player(
         (p for p in game.players if p.discord_id == interaction.user.id), None
     )
 
-
-
 async def cmd_actor_autocomplete(
     interaction: discord.Interaction, 
     current: str
@@ -601,6 +598,90 @@ async def cmd_target_autocomplete(
 
             choices = []
             for code, label in targets:
+                if current.lower() in label.lower() or current.lower() in code.lower():
+                    choices.append(app_commands.Choice(name=label,value=code))
+
+            return choices[:25]
+    except Exception:
+        return []
+
+async def exp_expense_autocomplete(
+    interaction: discord.Interaction, 
+    current: str
+) -> list[app_commands.Choice[str]]:
+    """Gastos disponibles para el jugador actual."""
+    try:
+        with sqlite3.connect(game_group.db_path) as conn:
+            game = Game.load_game(conn, channel_id=interaction.channel_id)
+            player = _resolve_player(game, interaction)
+            
+            if not player:
+                return []
+            
+            # Actores disponibles
+            expenses = player.exp_available_expenses()
+
+            choices = []
+            for code, label in expenses:
+                if current.lower() in label.lower() or current.lower() in code.lower():
+                    choices.append(app_commands.Choice(name=label,value=code))
+
+            return choices[:25]
+    except Exception:
+        return []
+
+
+async def exp_target_autocomplete(
+    interaction: discord.Interaction, 
+    current: str
+) -> list[app_commands.Choice[str]]:
+    """Sugiere los objetivos disponibles para el gasto seleccionado previamente."""
+    # Leemos el valor que el usuario ha seleccionado/escrito en el campo 'expense'
+    expense = getattr(interaction.namespace, "expense", None)
+
+    if not expense:
+        return [app_commands.Choice(name="Selecciona primero un gasto", value="")]
+
+    try:
+        with sqlite3.connect(game_group.db_path) as conn:
+            game = Game.load_game(conn, channel_id=interaction.channel_id)
+            player = _resolve_player(game, interaction)
+
+            # Comandos disponibles
+            targets = player.exp_available_targets(expense)
+
+            choices = []
+            for code, label in targets:
+                if current.lower() in label.lower() or current.lower() in code.lower():
+                    choices.append(app_commands.Choice(name=label,value=code))
+
+            choices.sort(key=lambda choice:choice.name)
+            return choices[:25]
+    except Exception:
+        return []
+
+
+async def exp_amount_autocomplete(
+    interaction: discord.Interaction, 
+    current: str
+) -> list[app_commands.Choice[str]]:
+    """Sugiere los objetivos válidos según el gasto y objetivo seleccionados."""
+    expense = getattr(interaction.namespace, "expense", None)
+    target = getattr(interaction.namespace, "target", None)
+
+    if not expense or not target:
+        return [app_commands.Choice(name="Selecciona primero gasto y objetivo", value="")]
+
+    try:
+        with sqlite3.connect(game_group.db_path) as conn:
+            game = Game.load_game(conn, channel_id=interaction.channel_id)
+            player = _resolve_player(game, interaction)
+
+            # Targets disponibles
+            amounts = player.exp_available_amounts(expense, target)
+
+            choices = []
+            for code, label in amounts:
                 if current.lower() in label.lower() or current.lower() in code.lower():
                     choices.append(app_commands.Choice(name=label,value=code))
 
@@ -789,6 +870,189 @@ async def cmd_user(
     except GameNotFoundException:
         await interaction.followup.send(
             "**Error:** No hay ninguna partida activa en este canal.",
+            ephemeral=True
+        )
+    except Exception as e:
+        error_detallado = format_error_with_location(e)
+        await interaction.followup.send(
+            f"**Error inesperado:** {error_detallado}",
+            ephemeral=True
+        )
+
+
+
+
+# ==============================================================================
+# COMANDO /mach expense
+# ==============================================================================
+
+@game_group.command(name="expense", description="Registra un nuevo gasto")
+@app_commands.describe(
+    expense="Tipo de gasto a realizar",
+    target="Objetivo del gasto (Provincia, ciudad, unidad, facción, etc)",
+    amount="Cantidad destinada al gasto"
+)
+@app_commands.autocomplete(
+    expense=exp_expense_autocomplete,
+    target=exp_target_autocomplete,
+    amount=exp_amount_autocomplete
+)
+async def expense(
+    interaction: discord.Interaction,
+    expense: str,
+    target: str,
+    amount: str
+):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        with sqlite3.connect(game_group.db_path) as conn:
+            game = Game.load_game(conn, channel_id=interaction.channel_id)
+            player = next((p for p in game.players if p.discord_id == interaction.user.id), None)
+
+            if not player:
+                await interaction.followup.send(
+                    "**Error:** No se identificó al jugador.",
+                    ephemeral=True
+                )
+                return
+            
+            valid_expense = [code for code, _ in player.exp_available_expenses()]
+            if expense not in valid_expense:
+                await interaction.followup.send(
+                    f"**Error:** `{expense}` no es un gasto válido.",
+                    ephemeral=True,
+                )
+                return
+
+            valid_target = [code for code, _ in player.exp_available_targets(expense)]
+            if target not in valid_target:
+                await interaction.followup.send(
+                    f"**Error:** `{target}` no es un objetivo válido.",
+                    ephemeral=True,
+                )
+                return
+
+            valid_amount = [code for code, _ in player.exp_available_amounts(expense, target)]
+            if amount not in valid_amount:
+                await interaction.followup.send(
+                    f"**Error:** `{amount}` no es una cantidad válida.",
+                    ephemeral=True,
+                )
+                return
+
+            cmd = Command(game, player, actor=expense, target=target, command=amount)
+            lines = player.cmd_add_command(cmd)
+
+            player.save(conn)
+
+        report = "\n".join(lines)
+
+        await interaction.followup.send(report, ephemeral=True)
+
+    except GameNotFoundException:
+        await interaction.followup.send(
+            "**Error:** No hay ninguna partida activa en este canal.",
+            ephemeral=True
+        )
+    except TooManyExpenses:
+        report = [f"Orden `{cmd}` enviada."]
+        report.append("**Error:** Superado el límite de gastos.")
+        report.append("**Órdenes recibidas hasta ahora:**")
+        for c in player.commands:
+            report.append(f"`{c}`")
+        await interaction.followup.send(
+            "\n".join(report),
+            ephemeral=True
+        )
+    except Exception as e:
+        error_detallado = format_error_with_location(e)
+        await interaction.followup.send(
+            f"**Error inesperado:** {error_detallado}",
+            ephemeral=True
+        )
+
+@admin_group.command(name="expense_user", description="Registra un gasto en nombre de un jugador")
+@app_commands.describe(
+    power="Código de la potencia/jugador a quien pertenece el gasto",
+    expense="Tipo de gasto a realizar",
+    target="Objetivo del gasto (Provincia, ciudad, unidad, facción, etc)",
+    amount="Cantidad destinada al gasto"
+)
+@app_commands.autocomplete(
+    power=cmd_power_autocomplete,
+    expense=exp_expense_autocomplete,
+    target=exp_target_autocomplete,
+    amount=exp_amount_autocomplete
+)
+async def expense_user(
+    interaction: discord.Interaction,
+    power: str,
+    expense: str,
+    target: str,
+    amount: str
+):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        with sqlite3.connect(admin_group.db_path) as conn:
+            game = Game.load_game(conn, channel_id=interaction.channel_id)
+            # Buscamos al jugador por su código de potencia en lugar del discord_id
+            player = next((p for p in game.players if p.power == power), None)
+
+            if not player:
+                await interaction.followup.send(
+                    f"**Error:** No se encontró a la potencia `{power}` en esta partida.",
+                    ephemeral=True
+                )
+                return
+            
+            valid_expense = [code for code, _ in player.exp_available_expenses()]
+            if expense not in valid_expense:
+                await interaction.followup.send(
+                    f"**Error:** `{expense}` no es un gasto válido.",
+                    ephemeral=True,
+                )
+                return
+
+            valid_target = [code for code, _ in player.exp_available_targets(expense)]
+            if target not in valid_target:
+                await interaction.followup.send(
+                    f"**Error:** `{target}` no es un objetivo válido.",
+                    ephemeral=True,
+                )
+                return
+
+            valid_amount = [code for code, _ in player.exp_available_amounts(expense, target)]
+            if amount not in valid_amount:
+                await interaction.followup.send(
+                    f"**Error:** `{amount}` no es una cantidad válida.",
+                    ephemeral=True,
+                )
+                return
+
+            cmd = Command(game, player, actor=expense, target=target, command=amount)
+            lines = player.cmd_add_command(cmd)
+
+            player.save(conn)
+
+        report = "\n".join(lines)
+
+        await interaction.followup.send(report, ephemeral=True)
+
+    except GameNotFoundException:
+        await interaction.followup.send(
+            "**Error:** No hay ninguna partida activa en este canal.",
+            ephemeral=True
+        )
+    except TooManyExpenses:
+        report = [f"Orden `{cmd}` enviada."]
+        report.append("**Error:** Superado el límite de gastos.")
+        report.append("**Órdenes recibidas hasta ahora:**")
+        for c in player.commands:
+            report.append(f"`{c}`")
+        await interaction.followup.send(
+            "\n".join(report),
             ephemeral=True
         )
     except Exception as e:

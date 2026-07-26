@@ -3,6 +3,12 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
+from enum import StrEnum
+
+class MovementMode(StrEnum):
+    LAND = "land"
+    SEA = "sea"
+    BOTH = "both"
 
 @dataclass(frozen=True)
 class Route:
@@ -177,3 +183,53 @@ class Map:
             if k.split()[0] not in exclude_ids }
 
         return self
+    
+    def adjacent_locations(self, origin: str, mode: MovementMode = MovementMode.BOTH) -> set[str]:
+        """Devuelve una lista de localizaciones adyacentes a una de origen.
+        
+        Las localizaciones adyacentes se devuelven como una lista de sus IDs. Se puede pasar un modo de
+        movimiento, de forma que nos devuelve las localizaciones a las que se puede llegar por tierra, por
+        mar o por ambos.
+        
+        En el caso de utilizarse MovementMode.BOTH, este modo va a utilizarse únicamente para sobornos
+        y para transporte de tropas. En estos dos casos el tratamiento de las provincias con dos costas
+        va a ser el mismo. La provincia terrestre se va a considerar equivalente a cualquiera de las dos
+        costas. Eso implica:
+        
+        - las rutas que llevan a cualquiera de las costas se consideran que llevan tambiéna la provincia.
+        - las rutas desde la provincia llevan a las localizaciones adyacentes a cualquiera de las dos costas.
+
+        En el caso de MovementMode.LAND y MovementMode.SEA eso no se aplica, y en las rutas por mar se
+        distingue entre la situación en cada costa.
+
+        Args:
+            origin (str)                 : ID o código de la localización de origen a consultar.
+            mode (MovementMode, optional): Tipo de rutas a evaluar (MovementMode.LAND, MovementMode.SEA o
+                MovementMode.BOTH). Por defecto es MovementMode.BOTH.
+
+        Returns:
+            set[str]: Lista con los IDs de las localizaciones adyacentes alcanzables.
+
+        Raises:
+            KeyError: Si el ID `origin` no existe en el diccionario de localizaciones del mapa.
+        """
+        locations = self.provinces | self.seas
+        adjacent = set()
+
+        if mode in (MovementMode.LAND, MovementMode.BOTH):
+            adjacent |= {r.destination for r in locations[origin].land_routes}
+        if mode in (MovementMode.SEA, MovementMode.BOTH):
+            adjacent |= {r.destination for r in locations[origin].sea_routes}
+        # Provincias con dos costas
+        if mode == MovementMode.BOTH:
+            # La provincia de origen muestra los destinos de las dos costas
+            adjacent |= {
+                r.destination
+                for l in locations.keys()
+                for r in locations[l].sea_routes
+                if l.split()[0] == origin
+            }
+            # Los destinos a cualquiera de las dos costas llevan también a la provincia
+            adjacent |= {dest.split()[0] for dest in adjacent}
+        
+        return adjacent

@@ -71,7 +71,7 @@ class GameTables:
             "cost": 12
         },
         "K":  {
-            "text": "Comprar Ejército o Flota",
+            "text": "Comprar ejército o flota",
             "target_type": "unit",
             "cost": 18
         }
@@ -177,3 +177,4 @@ class GameTables:
         ["pianc", "forno", None, None, "pisto", None, None, "otran", None, "aquil", "spole"],
         ["trent", "herze", None, "bresc", None, "arezz", None, "corsi", None, "patri", "saluz"]
     ]
+    

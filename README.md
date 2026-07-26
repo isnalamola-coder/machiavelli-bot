@@ -49,26 +49,6 @@ La versión actual de desarrollo es la 0.3.0. La versión actual de producción 
 *Versión 0.0.1*
 Sincroniza los comandos disponibles. Ejecutar cuando se deban registrar nuevos comandos de slash.
 
-### `/send` (todos)
-
-*Versión 0.0.1*
-**Deprecated**
-Envía un mensaje al bot. El mensaje puede ser de texto o un archivo adjunto. Se utilizará para enviar las órdenes.
-
-### `/list` (Juez)
-
-*Versión 0.0.1*
-**Deprecated**
-Muestra un listado de los jugadores que han mandado órdenes al bot. No se muestra el contenido de esas órdenes, para
-ello debe utilizarse `/view`.
-
-### `/view` (Juez)
-
-*Versión 0.0.1*
-**Deprecated**
-Muestra el contenido de los mensajes enviados por los jugadores. En el caso de los archivos adjuntos, lo que se muestra
-ese el identificador del archivo para descargarlo mediante `/file`.
-
 ### `/mach` (todos)
 
 *Versión 0.2.0*
@@ -94,6 +74,11 @@ Muestra las órdenes enviadas hasta el momento por el jugador.
 
 *Versión 0.2.0*
 Añade una orden nueva al turno actual.
+
+#### `/mach expense`
+
+*Versión 0.4.0*
+Añade un gasto nuevo al turno actual.
 
 ### `/shar` (Juez)
 
@@ -129,8 +114,12 @@ Ejecuta las órdenes de la partida y genera el informe para el siguiente turno.
 #### `/shar cmd_user`
 
 *Versión 0.3.0*
-Introduce las órdenes para un jugador determinado. Útil para los caso en los que el jugador ha mandado sus órdenes
-por `/send`
+Introduce las órdenes para un jugador determinado.
+
+#### `/shar expense_user`
+
+*Versión 0.4.0*
+Introduce gastos para un jugador determinado.
 
 ## Futuras versiones
 
@@ -138,8 +127,9 @@ Se prevén las siguientes versiones
 
 ### Versión 0.4.0
 
-- [X] Eliminar los comandos `/dice`, `/file` y `/clean`.
-- [ ] Expandir `/mach cmd`, `/mach cmdlist` y `/shar cmd_user` para tratar las órdenes de una campaña.
+- [X] Eliminar los comandos `/send`, `/list`, `/view`, `/dice`, `/file` y `/clean`.
+- [X] Expandir `/mach cmd`, `/mach cmdlist` y `/shar cmd_user` para tratar las órdenes de una campaña.
+- [X] Nuevos comandos `/mach expense` y `/shar expense_user` para enviar los gastos para el turno actual.
 
 ### Desarrollos futuros
 

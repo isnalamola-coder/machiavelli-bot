@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from machiavelli.scenario import Scenario, Power, HomeCountry
-from machiavelli.map import Map
+from machiavelli.map import Province, Sea, Map, MovementMode
 from machiavelli.tables import GameTables
 from typing import Self
 import sqlite3
@@ -13,9 +13,7 @@ from datetime import datetime, timedelta
 class FailedToStartError(Exception):
     """Excepción lanzada cuando se intenta arrancar una partida sin tener todos los prerrequisitos."""
 
-    def __init__(self, current: int, required: int, message: str):
-        self.current = current
-        self.required = required
+    def __init__(self, message: str):
         self.message = message
         super().__init__(self.message)
 
@@ -26,6 +24,14 @@ class DuplicatedGameException(Exception):
 class GameNotFoundException(Exception):
     """Lanzada cuando se busca una partida en la BBDD y no existe."""
     pass
+
+class TooManyExpenses(Exception):
+    """Lanzada cuando superamos el máximo de gastos que se pueden realizar en un turno."""
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
 
 @dataclass
 class Command:
@@ -47,6 +53,11 @@ class Command:
             * M: mantener
             * D: desbandar
             * C: crear
+        + En las campañas:
+            actor es una unidad
+            * las de GameTables.military_orders
+            actor es un gasto
+            * el número de ducados a gastar
 
     Attributes:
         game(Game)    : Referencia al Game a que pertenece este comando.
@@ -112,15 +123,14 @@ class Command:
             # Actor
             # A/F/G/E (Army/Fleet/Garrison/Expense)
             actor_type, actor_id = self.actor.split()
-            report.append(GameTables.actors[actor_type])
 
             if actor_type in ("A", "F", "G"):
                 # Army/Fleet/Garrison
-                report.append(locations[actor_id].name)
+                report.append(f"{GameTables.actors[actor_type]} de {locations[actor_id].name}")
             elif actor_type == "E":
                 # Expense
                 report.append(
-                    f"{GameTables.expenses[actor_id]['text']} ({GameTables.expenses[actor_id]['cost']})"
+                    f"{GameTables.expenses[actor_id]['text']}"
                 )
                 target_type = GameTables.expenses[actor_id]['target_type']
             
@@ -137,8 +147,6 @@ class Command:
                     # Campaign
                     report.append(GameTables.military_orders[self.command]["text"])
                     target_type = GameTables.military_orders[self.command]["target_type"]
-            elif actor_type == "E":
-                report.append(self.command)
             
             # Target. Target types are
             # None
@@ -151,27 +159,38 @@ class Command:
             if target_type:
                 if target_type == "army_ext":
                     army_ext = self.target.split()
-                    report.append(GameTables.actors[army_ext[0]])
-                    report.append(provinces[army_ext[1]].name)
                     if len(army_ext) > 2:
-                        report.append(GameTables.powers[army_ext[2]])
+                        report.append(
+                            f"{GameTables.actors[army_ext[0]]} "
+                            f"de {provinces[army_ext[1]].name} "
+                            f"({GameTables.powers[army_ext[2]]})")
+                    else:
+                        report.append(
+                            f"{GameTables.actors[army_ext[0]]} "
+                            f"de {provinces[army_ext[1]].name}")
                 elif target_type == "location":
                     report.append(locations[self.target].name)
                 elif target_type == "location_ext":
                     location_ext = self.target.split()
-                    report.append(locations[location_ext[0]].name)
+                    report.append()
                     if len(location_ext > 1):
-                        report.append(GameTables.powers[location_ext[1]])
+                        report.append(f"{locations[location_ext[0]].name} ({GameTables.powers[location_ext[1]]})")
+                    else:
+                        report.append(f"{locations[location_ext[0]].name}")
                 elif target_type == "province":
                     report.append(provinces[self.target].name)
                 elif target_type == "power":
                     report.append(GameTables.powers[self.target])
                 elif target_type == "unit":
                     unit_ext = self.target.split()
-                    report.append(GameTables.actors[unit_ext[0]])
-                    report.append(locations[unit_ext[1]].name)
+                    report.append(
+                        f"{GameTables.actors[unit_ext[0]]} "
+                        f"de {provinces[unit_ext[1]].name}")
 
-            return " ".join(report)
+            if actor_type == "E":
+                report.append(f"{self.command} ducados")
+
+            return "|".join(report)
         except:
             # Alguna orden mal formada
             return "Orden inválida"
@@ -275,6 +294,27 @@ class Player:
         # Guarda los comandos del jugador
         self.save_commands(conn)
 
+    def hc_provinces(self):
+        """Devuelve los códigos de las provincias natales del jugador"""
+        # Provincias de los home countries del jugador
+        provinces = [p
+            for hc in self.home_countries
+            for shc in self.game.scenario.home_countries
+            for p in shc.province_ids
+            if shc.faction_id == hc]
+
+        return [p for p in self.controlled_locations if p in provinces]
+    
+    def nonhc_provinces(self):
+        """Devuelve los códigos de las provincias no natales del jugador"""
+        # Provincias de los home countries del jugador
+        provinces = [p
+            for hc in self.home_countries
+            for shc in self.game.scenario.home_countries
+            for p in shc.province_ids
+            if shc.faction_id == hc]
+
+        return [p for p in self.controlled_locations if p not in provinces]
     
     def set_default_commands(self):
         """Asigna órdenes por defecto a todas las unidades que no tengan"""
@@ -444,8 +484,43 @@ class Player:
                 if p not in self.garrisons and map.provinces[p].city == "fortified":
                     choices.append((f"G {p}", f"Guarnición en {provinces[p].name} (reclutar)"))
         else:
-            # Campaña
-            pass
+            # Resto de turnos, campaña
+
+            # Los actores son todas las unidades del jugador
+            for a in self.armies:
+                choices.append((f"A {a}", f"Ejército en {provinces[a].name}"))
+            for a in self.fleets:
+                choices.append((f"F {a}", f"Flota en {locations[a].name}"))
+            for a in self.garrisons:
+                choices.append((f"G {a}", f"Guarnición en {provinces[a].name}"))
+
+            # Provincias adyacentes a unidades del jugador
+            # Para los sobornos, tanto das el tipo de unidad (Ejército|Flota|Guarnición), se considera adyacente
+            # independientemente del tipo de movimiento
+            # Hay que tener en cuenta las provincias que tienen dos costas
+            locations = self.game.map.provinces | self.game.map.seas
+            unit_provinces = {p for p in self.armies}
+            unit_provinces |= {p.split()[0] for p in self.fleets}
+            unit_provinces |= {p for p in self.garrisons}
+            unit_provinces |= {p for p in locations.keys() if p.split()[0] in unit_provinces}
+
+            adjacent = {r.destination for a in unit_provinces for r in locations[a].land_routes}
+            adjacent |= {r.destination.split()[0] for a in unit_provinces for r in locations[a].sea_routes}
+
+            bribe_armies = [a for p in self.game.players for a in p.armies if p != self and a in adjacent]
+            bribe_fleets = [f for p in self.game.players for f in p.fleets if p != self and f.split()[0] in adjacent]
+            bribe_garrisons = [g for p in self.game.players for g in p.garrisons if p != self and g in adjacent]
+            bribe_independent = [g for g in self.game.independent_garrisons if g in adjacent]
+
+            # Y ahora añado las unidades susceptibles de ser sobornadas
+            for a in bribe_armies:
+                choices.append((f"A {a}", f"Ejército en {provinces[a].name}"))
+            for a in bribe_fleets:
+                choices.append((f"F {a}", f"Flota en {locations[a].name}"))
+            for a in bribe_garrisons:
+                choices.append((f"G {a}", f"Guarnición en {provinces[a].name}"))
+            for a in bribe_independent:
+                choices.append((f"G {a}", f"Guarnición en {provinces[a].name}"))
 
         return choices
 
@@ -479,7 +554,28 @@ class Player:
                     choices.append((c, GameTables.maintenance_orders[c]["text"]))
         else:
             # Campaña
-            pass
+            actor_type, actor_location = actor.split(maxsplit=1)
+            actor_id = actor_location.split()[0]
+
+            is_besieging = actor_id in self.game.besieges
+            garrisons = [g for p in self.game.players for g in p.garrisons] + self.game.independent_garrisons
+            has_garrison = actor_id in garrisons
+            has_port = self.game.map.provinces[actor_id].has_port
+
+            if actor_type in ("A", "F") and not is_besieging:
+                choices.append(("A", f"{GameTables.military_orders['A']['text']}"))
+            if actor_type == "A" and has_garrison:
+                choices.append(("B", f"{GameTables.military_orders['B']['text']}"))
+            if actor_type == "F" and has_garrison and has_port:
+                choices.append(("B", f"{GameTables.military_orders['B']['text']}"))
+            choices.append(("H", f"{GameTables.military_orders['H']['text']}"))
+            if actor_type in ("A", "F") and is_besieging:
+                choices.append(("L", f"{GameTables.military_orders['L']['text']}"))
+            choices.append(("S", f"{GameTables.military_orders['S']['text']}"))
+            if actor_type == "F":
+                choices.append(("T", f"{GameTables.military_orders['T']['text']}"))
+            if not is_besieging:
+                choices.append(("C", f"{GameTables.military_orders['C']['text']}"))
 
         return choices
 
@@ -500,7 +596,306 @@ class Player:
             choices.append(("", "Ninguno"))
         else:
             # Campaña
-            pass
+            map = self.game.map
+            locations = map.provinces | map.seas
+
+            actor_type, actor_location = actor.split(maxsplit=1)
+            actor_id = actor_location.split()[0]
+
+            if command in ("B", "H", "L"):
+                # Sin objetivo (Asediar/Mantener/Levantar asedio)
+                choices.append(("", "Ninguno"))
+            elif command == "A":
+                assert actor_type in ("A", "F")
+                if actor_type == "A":
+                    # Es un ejército, usar land_routes
+                    for r in locations[actor_location].land_routes:
+                        choices.append((r.destination, f"{locations[r.destination].name}"))
+
+                    # Además, tengo que considerar convoys (ie, ejércitos transportados)
+                    fleets = [f for p in self.game.players for f in p.fleets]
+
+                    convoy = [c.target for c in self.commands if c.actor == actor and c.command == "A"]
+
+                    # Para poder ser un convoy, tiene que haber flotas (de cualquiera) en los pasos intermedios
+                    # Asumo que ya las comprobé conforme vamos creando la cadena, solo hay que comprobar la última
+                    if convoy:
+                        # Ya tenemos algo parecido a un convoy, vamos a comprobar que hay flota en todos los puntos
+                        for s in convoy:
+                            if s not in fleets:
+                                break
+                        else:
+                            # Si llegamos aquí, tenemos un convoy completo. Sacamos por dónde vamos
+                            convoy_end = convoy[-1]
+                            for r in map.adjacent_locations(convoy_end, mode=MovementMode.BOTH):
+                                if isinstance(locations[r], Sea):
+                                    if r in fleets:
+                                        # Si es un mar, solo lo admitimos si hay una flota
+                                        choices.append((r, f"{locations[r].name}"))
+                                else:
+                                    choices.append((r, f"{locations[r].name}"))
+                        # Eliminamos duplicados
+                        choices = list(dict.fromkeys(choices))
+                    else:
+                        # Un nuevo convoy, solo necesito comprobar que hay flota dónde vamos
+                        for r in map.adjacent_locations(actor_location, mode=MovementMode.BOTH):
+                            if r in fleets:
+                                choices.append((r, f"{locations[r].name}"))
+
+                elif actor_type == "F":
+                    # Es una flota, usar sea_routes
+                    for r in locations[actor_location].sea_routes:
+                        choices.append((r.destination, f"{locations[r.destination].name}"))
+            elif command == "S":
+                # Apoyar. Tenemos que apoyar los sitios a los que podamos mover, y todas las facciones que
+                # podamos apoyar.
+                if actor_type == "A":
+                    for r in locations[actor_location].land_routes:
+                        choices.append((r.destination, f"{locations[r.destination].name}"))
+                    # Y ahora, apoyando al resto de facciones
+                    for r in locations[actor_location].land_routes:
+                        for p in self.game.players:
+                            if p != self:
+                                choices.append((
+                                    f"{r.destination} ({p.power})",
+                                    f"{locations[r.destination].name} ({GameTables.powers[p.power]})"))
+                elif actor_type == "F":
+                    for r in locations[actor_location].sea_routes:
+                        choices.append((r.destination, f"{locations[r.destination].name}"))
+                    # Y ahora, apoyando al resto de facciones
+                    for r in locations[actor_location].sea_routes:
+                        for p in self.game.players:
+                            if p != self:
+                                choices.append((
+                                    f"{r.destination} ({p.power})",
+                                    f"{locations[r.destination].name} ({GameTables.powers[p.power]})"))
+                elif actor_type == "G":
+                    # Las guarniciones solo pueden apoyar en su provincia
+                    choices.append((actor_location, f"{locations[actor_location].name}"))
+                    for p in self.game.players:
+                        if p != self:
+                            choices.append((
+                                f"{actor_location} ({p.power})",
+                                f"{locations[actor_location].name} ({GameTables.powers[p.power]})"))
+            elif command == "T":
+                assert actor_type in ("F")
+                # Añadimos todos los ejércitos en provincias costeras (TODO: se podría ajustar mucho más)
+                armies = [a for p in self.game.players for a in p.armies if locations[a].sea_routes]
+                for a in armies:
+                    choices.append((f"A {a}", f"Ejército en {locations[a].name}"))
+
+        return choices
+    
+    # Funciones para la precarga de gastos disponibles
+    def exp_available_expenses(self) -> list[tuple[str, str]]:
+        """Devuelve la lista de gastos disponibles para un jugador.
+        
+        Los actores disponibles se devuelven como una lista de tuples, con el código y la cadena visible. Ej:
+        ("E B", "Pacificar rebelión")
+        """
+        choices = []
+
+        # Solo los gastos que el jugador se puede permitir
+        expenses = { k: e for k, e in GameTables.expenses.items() if e["cost"] <= self.ducats }
+
+        # Provincias adyacentes a unidades del jugador
+        # Para los sobornos, tanto das el tipo de unidad (Ejército|Flota|Guarnición), se considera adyacente
+        # independientemente del tipo de movimiento
+        # Hay que tener en cuenta las provincias que tienen dos costas
+        locations = self.game.map.provinces | self.game.map.seas
+        unit_provinces = {p for p in self.armies}
+        unit_provinces |= {p.split()[0] for p in self.fleets}
+        unit_provinces |= {p for p in self.garrisons}
+        unit_provinces |= {p for p in locations.keys() if p.split()[0] in unit_provinces}
+
+        adjacent = {r.destination for a in unit_provinces for r in locations[a].land_routes}
+        adjacent |= {r.destination.split()[0] for a in unit_provinces for r in locations[a].sea_routes}
+
+        bribe_armies = [a for p in self.game.players for a in p.armies if p != self and a in adjacent]
+        bribe_fleets = [f for p in self.game.players for f in p.fleets if p != self and f.split()[0] in adjacent]
+        bribe_garrisons = [g for p in self.game.players for g in p.garrisons if p != self and g in adjacent]
+
+        for key, expense in expenses.items():
+            # Trataremos cada caso individualmente
+            if key == "A" and self.game.famine:
+                # Paliar hambruna
+                choices.append((f"E {key}", f"{expense['text']}"))
+            elif key == "B":
+                # Pacificar rebelión
+                rebellions = [r for p in self.game.players for r in (p.rebelled_provinces + p.rebelled_cities)]
+                if rebellions:
+                    choices.append((f"E {key}", f"{expense['text']}"))
+            elif key == "C":
+                # Comenzar rebelión en provincia no natal
+                no_hc = [
+                    pr for p in self.game.players for pr in p.nonhc_provinces()
+                    if p != self if pr not in p.rebelled_provinces if pr not in p.rebelled_cities]
+                if no_hc:
+                    choices.append((f"E {key}", f"{expense['text']}"))
+            elif key == "D":
+                # Comenzar rebelión en provincia natal
+                hc = [
+                    pr for p in self.game.players for pr in p.hc_provinces()
+                    if p != self if pr not in p.rebelled_provinces if pr not in p.rebelled_cities]
+                if hc:
+                    choices.append((f"E {key}", f"{expense['text']}"))
+            elif key == "E":
+                # Ordenar asesinato
+                ass = [p.power for p in self.game.players if p.home_countries if p.power in self.ass_counters]
+                if ass:
+                    choices.append((f"E {key}", f"{expense['text']}"))
+            elif key == "F":
+                # Contra-soborno
+                choices.append((f"E {key}", f"{expense['text']}"))
+            elif key in ("G", "H"):
+                # Desbandar/Comprar guarnición autónoma
+                garrisons = [g for g in self.game.independent_garrisons if g in adjacent]
+                if garrisons:
+                    choices.append((f"E {key}", f"{expense['text']}"))
+            elif key == "I":
+                # Convertir guarnición en autónoma
+                if bribe_garrisons:
+                    choices.append((f"E {key}", f"{expense['text']}"))
+            elif key == "J":
+                # Desbandar unidad
+                if bribe_armies or bribe_fleets or bribe_garrisons:
+                    choices.append((f"E {key}", f"{expense['text']}"))
+            elif key == "K":
+                # Comprar ejército o flota
+                if bribe_armies or bribe_fleets:
+                    choices.append((f"E {key}", f"{expense['text']}"))
+
+        return choices
+
+    def exp_available_targets(self, expense: str) -> list[tuple[str, str]]:
+        """Devuelve la lista de objetivos disponibles para un gasto.
+        
+        Los actores disponibles se devuelven como una lista de tuples, con el código y la cadena visible. Ej:
+        ("E B", "Pacificar rebelión")
+        """
+        choices = []
+
+        # Recuperamos los datos del gasto
+        _, key = expense.split()
+        exp = GameTables.expenses[key]
+        map = self.game.map
+
+        # Provincias adyacentes a unidades del jugador
+        # Para los sobornos, tanto das el tipo de unidad (Ejército|Flota|Guarnición), se considera adyacente
+        # independientemente del tipo de movimiento
+        # Hay que tener en cuenta las provincias que tienen dos costas
+        locations = self.game.map.provinces | self.game.map.seas
+        unit_provinces = {p for p in self.armies}
+        unit_provinces |= {p.split()[0] for p in self.fleets}
+        unit_provinces |= {p for p in self.garrisons}
+        unit_provinces |= {p for p in locations.keys() if p.split()[0] in unit_provinces}
+
+        adjacent = {r.destination for a in unit_provinces for r in locations[a].land_routes}
+        adjacent |= {r.destination.split()[0] for a in unit_provinces for r in locations[a].sea_routes}
+
+        bribe_armies = [a for p in self.game.players for a in p.armies if p != self and a in adjacent]
+        bribe_fleets = [f for p in self.game.players for f in p.fleets if p != self and f.split()[0] in adjacent]
+        bribe_garrisons = [g for p in self.game.players for g in p.garrisons if p != self and g in adjacent]
+
+        if key == "A":
+            # Paliar hambruna
+            for f in self.game.famine:
+                choices.append((f"{map.provinces[f].id}", f"{map.provinces[f].name}"))
+        elif key == "B":
+            # Pacificar rebelión
+            rebellions = [r for p in self.game.players for r in (p.rebelled_provinces + p.rebelled_cities)]
+            for r in rebellions:
+                choices.append((f"{map.provinces[r].id}", f"{map.provinces[r].name}"))
+        elif key == "C":
+            # Comenzar rebelión en provincia no natal
+            no_hc = [
+                pr for p in self.game.players for pr in p.nonhc_provinces()
+                if p != self if pr not in p.rebelled_provinces if pr not in p.rebelled_cities]
+            for r in no_hc:
+                choices.append((f"{map.provinces[r].id}", f"{map.provinces[r].name}"))
+        elif key == "D":
+            # Comenzar rebelión en provincia natal
+            hc = [
+                pr for p in self.game.players for pr in p.hc_provinces()
+                if p != self if pr not in p.rebelled_provinces if pr not in p.rebelled_cities]
+            for r in hc:
+                choices.append((f"{map.provinces[r].id}", f"{map.provinces[r].name}"))
+        elif key == "E":
+            # Ordenar asesinato
+            ass = [p.power for p in self.game.players if p.home_countries if p.power in self.ass_counters]
+            for a in ass:
+                choices.append((f"{a}", f"{GameTables.powers[a]}"))
+        elif key == "F":
+            # Contra-soborno
+            # Son todas las unidades del juego
+            armies = [u for p in self.game.players for u in p.armies]
+            for a in armies:
+                choices.append((f"A {a}", f"Ejército en {locations[a].name}"))
+            fleets = [u for p in self.game.players for u in p.fleets]
+            for f in fleets:
+                choices.append((f"F {f}", f"Flota en {locations[f].name}"))
+            garrisons = [u for p in self.game.players for u in p.garrisons] + self.game.independent_garrisons
+            for g in garrisons:
+                choices.append((f"G {g}", f"Guarnición en {locations[g].name}"))
+        elif key in ("G", "H"):
+            # Desbandar/Comprar guarnición autónoma
+            garrisons = [g for g in self.game.independent_garrisons if g in adjacent]
+            for g in garrisons:
+                choices.append((f"G {g}", f"Guarnición en {locations[g].name}"))
+        elif key == "I":
+            # Convertir guarnición en autónoma
+            for g in bribe_garrisons:
+                choices.append((f"G {g}", f"Guarnición en {locations[g].name}"))
+        elif key == "J":
+            # Desbandar unidad
+            for a in bribe_armies:
+                choices.append((f"A {a}", f"Ejército en {locations[a].name}"))
+            for f in bribe_fleets:
+                choices.append((f"F {f}", f"Flota en {locations[f].name}"))
+            for g in bribe_garrisons:
+                choices.append((f"F {g}", f"Guarnición en {locations[g].name}"))
+        elif key == "K":
+            # Comprar ejército o flota
+            for a in bribe_armies:
+                choices.append((f"A {a}", f"Ejército en {locations[a].name}"))
+            for f in bribe_fleets:
+                choices.append((f"F {f}", f"Flota en {locations[f].name}"))
+
+        return choices
+
+    def exp_available_amounts(self, expense: str, target: str) -> list[tuple[str, str]]:
+        """Devuelve la lista de cantidades disponibles para un gasto
+        
+        Vamos a incluir en esta lista, siempre, el 0 (que servirá para cancelar la orden, si existía),
+        y luego desde la cantidad mínima hasta la cantidad que disponga el jugador.
+        """
+        choices = [("0", "Cancelar gasto")]
+
+        # Recuperamos los datos del gasto
+        _, key = expense.split()
+        exp = GameTables.expenses[key]
+        cost = exp["cost"]
+        map = self.game.map
+
+        if key in ("A", "B", "C", "D"):
+            # Gastos fijos: paliar hambruna, pacificar rebelión, comenzar rebelión
+            choices.append((str(cost), f"{cost} ducados"))
+        elif key == "E":
+            # Ordenar asesinato
+            for c in range(cost, cost * 3 + 1, cost):
+                choices.append((str(c), f"{c} ducados"))
+        elif key == "F":
+            # Contra-soborno
+            for c in range(cost, self.ducats + 1, 3):
+                choices.append((str(c), f"{c} ducados"))
+        elif key in ("G", "H", "I", "J", "K"):
+            # Sobornos
+            # Dobla el coste para guarniciones en ciudades mayores
+            target_type, target_id = target.split()
+            if target_type == "G" and map.provinces[target_id].major_city > 1:
+                cost *= 2
+            for c in range(cost, self.ducats + 1, 3):
+                choices.append((str(c), f"{c} ducados"))
 
         return choices
     
@@ -536,7 +931,61 @@ class Player:
                     self.commands.append(command)
         else:
             # Campaña
-            pass
+            actor_type, actor_id = command.actor.split()
+
+            if actor_type == "E":
+                # Buscamos si el gasto ya estaba registrado
+                expense = next((
+                    c for c in self.commands
+                    if c.actor == command.actor
+                    and c.target == command.target), None)
+
+                if expense:
+                    if int(command.command) == 0:
+                        self.commands.remove(expense)
+                    else:
+                        expense.command = command.command
+                else:
+                    if len(self.commands) >= 4:
+                        raise TooManyExpenses(message="Solo se permiten hasta cuatro gastos por campaña")
+                    else:
+                        self.commands.append(command)
+            else:
+                # Buscamos si el actor ya estaba registrado
+                cmds = [c for c in self.commands if c.actor == command.actor]
+                
+                if cmds:
+                    # Y ahora comprobamos si hay convoy
+                    is_convoy = False
+                    locations = self.game.map.provinces | self.game.map.seas
+
+                    if actor_type == "A" and command.command == "A":
+                        fleets = [f for p in self.game.players for f in p.fleets]
+                        convoy = [c.target for c in self.commands if c.actor == command.actor and c.command == "A"]
+                        if len(convoy) == len(cmds):
+                            for c in convoy:
+                                if c not in fleets:
+                                    break
+                            else:
+                                # Tenemos un convoy, vamos a ver si el último destino es válido
+                                last_place = convoy[-1]
+                                destination = locations[command.target]
+                                if (
+                                    last_place in fleets and
+                                    command.target in self.game.map.adjacent_locations(last_place, MovementMode.BOTH)
+                                    and (command.target in fleets or isinstance(destination, Province))
+                                ):
+                                    is_convoy = True
+                    # Ya lo tenemos. Ahora, si es convoy añadimos el comando, sino sustituimos lo anterior
+                    if is_convoy:
+                        self.commands.append(command)
+                    else:
+                        # Borramos los anteriores
+                        self.commands = [c for c in self.commands if c not in cmds]
+                        self.commands.append(command)
+                else:
+                    # Nueva orden, solo la registramos
+                    self.commands.append(command)
 
         # Reportamos las órdenes hasta ahora
         report.append("**Órdenes recibidas hasta ahora:**")
@@ -544,7 +993,6 @@ class Player:
             report.append(f"`{c}`")
         
         return report
-
 
     @classmethod
     def load_players(cls, conn: sqlite3.Connection, game: Game) -> list[Self]:
@@ -731,7 +1179,7 @@ class Game:
             players = [p for p in self.players if p.commands]
             if players:
                 for p in players:
-                    report.append(f"- <@{p.discord_id}> ({p.player_id}): {len(p.commands)}")
+                    report.append(f"- <@{p.discord_id}> ({p.player_id})")
             else:
                 report.append("- Nadie :wink:.")
 
