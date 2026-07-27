@@ -114,8 +114,8 @@ async def add_player(interaction: discord.Interaction, discord_player: discord.M
             # Lo añade a la lista de la partida en memoria
             game.players.append(new_player)
             
-            # Hace el save estrictamente del Player usando el ID de la partida cargada
-            new_player.save(conn, game.database_id)
+            # Guardamos los datos del jugador
+            new_player.save(conn)
             
         # Confirmación
         report = []

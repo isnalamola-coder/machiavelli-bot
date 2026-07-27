@@ -15,7 +15,6 @@ from machiavelli.discord import init_game_commands
 # Cargar variables de entorno
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
-COMMANDS_CHANNEL = int(os.getenv("COMMANDS_CHANNEL"))
 
 # La base de datos
 DB_PATH = os.getenv("DATABASE_PATH", "machiavelli.db")

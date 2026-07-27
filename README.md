@@ -35,7 +35,6 @@ Los parámetros que necesita el bot los fijamos en un fichero .env. Se puede tom
 DISCORD_TOKEN=tu_token_aqui
 ADMIN_ROLE_NAME=Juez
 DATABASE_PATH=game.db
-COMMANDS_CHANNEL=id_del_canal
 ```
 
 ## Versión
@@ -125,11 +124,9 @@ Introduce gastos para un jugador determinado.
 
 Se prevén las siguientes versiones
 
-### Versión 0.4.0
+### Versión 0.4.1
 
-- [X] Eliminar los comandos `/send`, `/list`, `/view`, `/dice`, `/file` y `/clean`.
-- [X] Expandir `/mach cmd`, `/mach cmdlist` y `/shar cmd_user` para tratar las órdenes de una campaña.
-- [X] Nuevos comandos `/mach expense` y `/shar expense_user` para enviar los gastos para el turno actual.
+- [ ] Corrección de los bugs más importantes.
 
 ### Desarrollos futuros
 
@@ -157,3 +154,7 @@ Cambios que afectan a los comandos del bot. Los cambios se irán incorporando a 
   introducir en el bot las órdenes de un jugador que las haya mandado usando `/send`. Se ha mejorado el formato de
   `/mach game_report` y de `/mach game_status`.
 - Versión 0.3.1: Corrección de algunos bugs.
+- Versión 0.4.0: Se eliminan definitivamente los comandos `/send`, `/list`, `/view`, `/dice`, `/file` y `/clean`.
+  Se expanden `/mach cmd`, `/mach cmdlist` y `/shar cmd_user` para tratar las órdenes de una campaña, y se añaden
+  los nuevos comandos `/mach expense` y `/shar expense_user` para enviar los gastos para el turno actual, que se
+  separan del envío de órdenes a las tropas.

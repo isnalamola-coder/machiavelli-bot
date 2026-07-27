@@ -172,8 +172,7 @@ class Command:
                     report.append(locations[self.target].name)
                 elif target_type == "location_ext":
                     location_ext = self.target.split()
-                    report.append()
-                    if len(location_ext > 1):
+                    if len(location_ext) > 1:
                         report.append(f"{locations[location_ext[0]].name} ({GameTables.powers[location_ext[1]]})")
                     else:
                         report.append(f"{locations[location_ext[0]].name}")
@@ -560,7 +559,8 @@ class Player:
             is_besieging = actor_id in self.game.besieges
             garrisons = [g for p in self.game.players for g in p.garrisons] + self.game.independent_garrisons
             has_garrison = actor_id in garrisons
-            has_port = self.game.map.provinces[actor_id].has_port
+            province = self.game.map.provinces.get(actor_location)
+            has_port = province.has_port if province else False
 
             if actor_type in ("A", "F") and not is_besieging:
                 choices.append(("A", f"{GameTables.military_orders['A']['text']}"))
