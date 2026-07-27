@@ -946,7 +946,8 @@ class Player:
                     else:
                         expense.command = command.command
                 else:
-                    if len(self.commands) >= 4:
+                    expense_count = sum(command.actor.startswith("E ") for command in self.commands)
+                    if expense_count >= 4:
                         raise TooManyExpenses(message="Solo se permiten hasta cuatro gastos por campaña")
                     else:
                         self.commands.append(command)
