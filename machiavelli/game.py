@@ -185,6 +185,11 @@ class Command:
                     report.append(
                         f"{GameTables.actors[unit_ext[0]]} "
                         f"de {provinces[unit_ext[1]].name}")
+                elif target_type == "unit_type":
+                    if self.target == "0":
+                        report.append("Desbandar")
+                    else:
+                        report.append(f"{GameTables.actors[self.target]}")
 
             if actor_type == "E":
                 report.append(f"{self.command} ducados")
@@ -574,8 +579,7 @@ class Player:
             choices.append(("S", f"{GameTables.military_orders['S']['text']}"))
             if actor_type == "F":
                 choices.append(("T", f"{GameTables.military_orders['T']['text']}"))
-            if not is_besieging:
-                choices.append(("C", f"{GameTables.military_orders['C']['text']}"))
+            choices.append(("C", f"{GameTables.military_orders['C']['text']}"))
 
         return choices
 
@@ -683,6 +687,16 @@ class Player:
                 armies = [a for p in self.game.players for a in p.armies if locations[a].sea_routes]
                 for a in armies:
                     choices.append((f"A {a}", f"Ejército en {locations[a].name}"))
+            elif command == "C":
+                choices.append(("0", "Desbandar"))
+                if locations[actor_id].city == "fortified":
+                    # Las conversiones, en ciudades fortificadas
+                    if actor_type == "G":
+                        choices.append(("A", f"{GameTables.actors['A']}"))
+                        if locations[actor_id].has_port:
+                            choices.append(("F", f"{GameTables.actors['F']}"))
+                    elif actor_type == "A" or locations[actor_id].has_port:
+                        choices.append(("G", f"{GameTables.actors['G']}"))
 
         return choices
     
@@ -1246,14 +1260,14 @@ class Game:
         self.turn_events.append(f"**Fecha:** {now}. **Próximo turno:** {next_deadline}")
 
         if self.turn_number == 0:
-            report = self.start_game()
+            self.start_game()
         else:
             # Ya tenemos la partida en marcha
             if self.turn_number % 4 == 1:
-                report = self.spring_maintenance()
+                self.spring_maintenance()
             else:
                 # Campaña
-                pass
+                self.run_campaign()
         
         self.turn_number += 1
         last_date = datetime.fromisoformat(self.next_deadline)
@@ -1261,10 +1275,7 @@ class Game:
         for p in self.players:
             p.commands = []
 
-        report.append("### __**Turno completado**__")
-
         return self.turn_report()
-        # return report
 
     @classmethod
     def create_game(cls, name: str, channel_id: int, conn: sqlite3.Connection) -> Self:
