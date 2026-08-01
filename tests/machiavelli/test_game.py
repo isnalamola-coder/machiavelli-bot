@@ -1,10 +1,16 @@
 # tests/test_machiavelli/test_game.py
 import sqlite3
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
+
 import pytest
 
-from machiavelli.game import DuplicatedGameException, GameNotFoundException
-from machiavelli.game import Game, Player
+from machiavelli.game import (
+    DuplicatedGameException,
+    Game,
+    GameNotFoundException,
+    Player,
+)
+
 
 def test_player_constructor():
     """Test sobre el constructor de Player"""
@@ -36,7 +42,9 @@ def test_game_constructor():
     assert game.name == name
     assert game.channel_id is None
 
+
 # Tests on database functions
+
 
 # database on Player
 def test_load_players_success():
@@ -50,23 +58,44 @@ def test_load_players_success():
 
     mock_cursor.fetchall.return_value = [
         (
-            "carlos_id", 1111, '["rome", "bari"]', '["veron", "messi"]',
-            '["berga", "bolog"]', '["venic", "bosni"]', '["V", "L"]', 8, '["flore"]', '["pisa"]', '["M"]', "M"
+            "carlos_id",
+            1111,
+            '["rome", "bari"]',
+            '["veron", "messi"]',
+            '["berga", "bolog"]',
+            '["venic", "bosni"]',
+            '["V", "L"]',
+            8,
+            '["flore"]',
+            '["pisa"]',
+            '["M"]',
+            "M",
         ),
         ("sofia_id", None, None, None, None, None, None, 0, None, None, None, None),
     ]
 
     players = Player.load_players(mock_conn, mock_game)
 
-    mock_cursor.execute.assert_has_calls([
-            call("""
+    mock_cursor.execute.assert_has_calls(
+        [
+            call(
+                """
             SELECT player_id, discord_id, controlled_locations, armies, fleets, garrisons,
                 ass_counters, ducats, rebelled_provinces, rebelled_cities, home_countries, power
             FROM players WHERE game_id = ?
-            """, (42,)),
-            call('SELECT actor, command, target FROM commands WHERE game_id = ? AND player_id = ?', (42, 'carlos_id')),
-            call('SELECT actor, command, target FROM commands WHERE game_id = ? AND player_id = ?', (42, 'sofia_id'))
-    ])
+            """,
+                (42,),
+            ),
+            call(
+                "SELECT actor, command, target FROM commands WHERE game_id = ? AND player_id = ?",
+                (42, "carlos_id"),
+            ),
+            call(
+                "SELECT actor, command, target FROM commands WHERE game_id = ? AND player_id = ?",
+                (42, "sofia_id"),
+            ),
+        ]
+    )
 
     assert len(players) == 2
     assert isinstance(players[0], Player)
@@ -105,6 +134,7 @@ def test_load_players_success():
     assert players[1].ducats == 0
     assert players[1].power is None
 
+
 # database on Game
 def test_create_game_success():
     """Comprueba que create_game inserta la partida correctamente en la BBDD
@@ -140,9 +170,7 @@ def test_create_game_raises_duplicated_exception():
     mock_cursor = MagicMock(spec=sqlite3.Cursor)
     mock_conn.cursor.return_value = mock_cursor
 
-    mock_cursor.execute.side_effect = sqlite3.IntegrityError(
-        "UNIQUE constraint failed"
-    )
+    mock_cursor.execute.side_effect = sqlite3.IntegrityError("UNIQUE constraint failed")
 
     name = "Partida Repetida"
     channel_id = 999999
@@ -157,21 +185,28 @@ def test_create_game_raises_duplicated_exception():
         "INSERT INTO games (name, channel_id) VALUES (?, ?)", (name, channel_id)
     )
 
+
 def test_load_game_success():
     """Comprueba que load_game recupera los datos de la partida de la BBDD"""
-    
+
     mock_conn = MagicMock(spec=sqlite3.Connection)
     mock_cursor = MagicMock(spec=sqlite3.Cursor)
     mock_conn.cursor.return_value = mock_cursor
 
     mock_cursor.fetchone.return_value = (
-        7, "Campaña de Milán", 987654, None, 0, None, None,
-        '["venic", "bari"]', '["rome", "parma"]', '["turin"]'
+        7,
+        "Campaña de Milán",
+        987654,
+        None,
+        0,
+        None,
+        None,
+        '["venic", "bari"]',
+        '["rome", "parma"]',
+        '["turin"]',
     )
 
-    with patch.object(
-        Player, "load_players"
-    ) as mock_load_players:
+    with patch.object(Player, "load_players") as mock_load_players:
         mock_load_players.side_effect = lambda conn, game: [
             Player(game, player_id="fake_carlos", discord_id=111),
             Player(game, player_id="fake_sofia", discord_id=222),
@@ -190,13 +225,19 @@ def test_load_game_success():
         assert "parma" in game.independent_garrisons
         assert "turin" in game.besieges
 
-        mock_cursor.execute.assert_has_calls([
-            call(
-                "SELECT id, name, channel_id, scenario_id, turn_number, weekly_deadline, next_deadline, "
-                "famine, independent_garrisons, besieges FROM games WHERE id = ?", (7,)
-            ),
-            call("SELECT message FROM game_events WHERE game_id = ? ORDER BY id ASC", (7,))
-        ])
+        mock_cursor.execute.assert_has_calls(
+            [
+                call(
+                    "SELECT id, name, channel_id, scenario_id, turn_number, weekly_deadline, next_deadline, "
+                    "famine, independent_garrisons, besieges FROM games WHERE id = ?",
+                    (7,),
+                ),
+                call(
+                    "SELECT message FROM game_events WHERE game_id = ? ORDER BY id ASC",
+                    (7,),
+                ),
+            ]
+        )
 
         mock_load_players.assert_called_once_with(mock_conn, game)
 
@@ -214,6 +255,7 @@ def test_load_game_raises_not_found_and_never_loads_players():
 
         mock_load_players.assert_not_called()
 
+
 def test_game_save_inserts_new_game():
     """Comprueba que si database_id es None, save() hace un INSERT."""
     mock_conn = MagicMock(spec=sqlite3.Connection)
@@ -223,14 +265,14 @@ def test_game_save_inserts_new_game():
 
     # Partida sin ID (Nueva)
     game = Game(name="Nueva Partida", channel_id=111)
-    
+
     game.save(mock_conn)
 
     # Verificamos que llamó al INSERT
     mock_cursor.execute.assert_any_call(
         "INSERT INTO games (name, channel_id, scenario_id, turn_number, weekly_deadline, next_deadline, "
         "famine, independent_garrisons, besieges) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("Nueva Partida", 111, None, 0, None, None, "[]", "[]", "[]")
+        ("Nueva Partida", 111, None, 0, None, None, "[]", "[]", "[]"),
     )
     # Verificamos que el objeto actualizó su ID en memoria
     assert game.database_id == 99
@@ -244,17 +286,17 @@ def test_game_save_updates_existing_game():
 
     # Partida que YA existe en la BBDD (tiene ID 42)
     game = Game(name="Partida Vieja", channel_id=222, database_id=42)
-    
+
     # Modificamos un dato en memoria (ej. el nombre)
     game.name = "Partida Renombrada"
-    
+
     game.save(mock_conn)
 
     # Verificamos que ejecutó el UPDATE usando el ID como filtro
     mock_cursor.execute.assert_any_call(
         "UPDATE games SET name = ?, channel_id = ?, scenario_id = ?, turn_number = ?, weekly_deadline = ?, "
-        "next_deadline = ?, famine = ?, independent_garrisons = ?, besieges = ? WHERE id = ?", 
-        ("Partida Renombrada", 222, None, 0, None, None, "[]", "[]", "[]", 42)
+        "next_deadline = ?, famine = ?, independent_garrisons = ?, besieges = ? WHERE id = ?",
+        ("Partida Renombrada", 222, None, 0, None, None, "[]", "[]", "[]", 42),
     )
     # El ID no debe haber cambiado
     assert game.database_id == 42

@@ -1,8 +1,11 @@
 # tests/test_machiavelli/test_map.py
 
-from machiavelli.map import Map, Province, Sea, Location, Route
 from unittest.mock import patch
+
 import pytest
+
+from machiavelli.map import Location, Map, MovementMode, Province, Route, Sea
+
 
 @pytest.fixture
 def mock_json_data():
@@ -18,8 +21,22 @@ def mock_json_data():
             {"name": "Florence"},
             {
                 "name": "Provence",
+                "land_routes": [{"destination": "avign"}],
+            },
+            {
+                "name": "Provence South Coast",
                 "custom_id": "prove S",
-                "sea_routes": [{"destination": "WGOL"},{"destination": "EGOL"},{"destination": "marse"}],
+                "sea_routes": [
+                    {"destination": "WGOL"},
+                    {"destination": "EGOL"},
+                ],
+            },
+            {
+                "name": "Provence East Coast",
+                "custom_id": "prove E",
+                "sea_routes": [
+                    {"destination": "EGOL"},
+                ],
             },
         ],
         "seas": [
@@ -31,14 +48,19 @@ def mock_json_data():
             },
             {
                 "name": "Western Gulf of Lyons",
-                "sea_routes": [{"destination": "EGOL"},{"destination": "prove S"}],
+                "sea_routes": [{"destination": "EGOL"}, {"destination": "prove S"}],
             },
             {
                 "name": "Eastern Gulf of Lyons",
-                "sea_routes": [{"destination": "WGOL"},{"destination": "prove S"}],
+                "sea_routes": [
+                    {"destination": "WGOL"},
+                    {"destination": "prove S"},
+                    {"destination": "prove E"},
+                ],
             },
         ],
     }
+
 
 def test_province_creation_generates_id_from_long_name():
     """Comprueba que el ID se genera en minúsculas y se recorta a 5 caracteres."""
@@ -50,14 +72,15 @@ def test_province_creation_generates_id_from_long_name():
 
 
 def test_province_creation_generates_id_from_short_name():
-    """Comprueba que si el nombre tiene menos de 5 caracteres, el ID se genera sin problemas."""
+    """Si el nombre tiene menos de 5 caracteres, el ID se genera sin problemas."""
     provincia = Province(name="Rome")
 
     assert provincia.name == "Rome"
     assert provincia.id == "rome"
 
+
 def test_province_creation_with_city_and_economic_values():
-    """Comprueba la correcta asignación de tipos de ciudad, puertos e ingresos dinámicos."""
+    """Correcta asignación de tipos de ciudad, puertos e ingresos dinámicos."""
     # Roma tiene ciudad, por lo que ahora sus ingresos por defecto deben pasar a ser 1
     roma = Province(name="Rome", city="city")
     assert roma.city == "city"
@@ -83,7 +106,7 @@ def test_province_creation_with_city_and_economic_values():
 
 
 def test_sea_creation_generates_id_from_initials():
-    """Comprueba que el ID de un mar se genera usando las iniciales de cada palabra en mayúsculas."""
+    """El ID de un mar se genera usando las iniciales de cada palabra en mayúsculas."""
     mar_largo = Sea(name="Eastern Tyrrhenian Sea")
     mar_corto = Sea(name="Lagoon")
 
@@ -95,9 +118,10 @@ def test_sea_creation_generates_id_from_initials():
 
 
 def test_map_loading_separates_land_and_sea(mock_json_data):
-    """Comprueba que el mapa lee el JSON y clasifica correctamente la tierra de los mares."""
-    with patch("machiavelli.map.json.load", return_value=mock_json_data), patch(
-        "builtins.open"
+    """El mapa lee el JSON y clasifica correctamente la tierra de los mares."""
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
     ):
         game_map = Map.load_map()
 
@@ -114,10 +138,11 @@ def test_map_loading_separates_land_and_sea(mock_json_data):
 
 
 def test_map_loading_applies_exclusions(mock_json_data):
-    """Comprueba que el se purgan correctamente los IDs solicitados de ambos diccionarios."""
+    """Se purgan correctamente los IDs solicitados de ambos diccionarios."""
     # Le pedimos que excluya una provincia terrestre ('tivol') y un mar ('IS')
-    with patch("machiavelli.map.json.load", return_value=mock_json_data), patch(
-        "builtins.open"
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
     ):
         game_map = Map.load_map(exclude_ids=["tivol", "IS"])
 
@@ -130,8 +155,9 @@ def test_map_loading_applies_exclusions(mock_json_data):
     assert "flore" in game_map.provinces
     assert "WTS" in game_map.seas
 
+
 def test_route_creation_default_values():
-    """Comprueba que una ruta estándar se crea correctamente y su estrecho por defecto es None."""
+    """Una ruta estándar se crea correctamente y su estrecho por defecto es None."""
     ruta_libre = Route(destination="rome")
 
     assert ruta_libre.destination == "rome"
@@ -139,8 +165,8 @@ def test_route_creation_default_values():
 
 
 def test_route_creation_with_strait():
-    """Comprueba que una ruta con estrecho almacena la provincia que controla el paso."""
-    # Ejemplo: Conexión marítima controlada militarmente desde la provincia de Messina ('messi')
+    """Una ruta con estrecho almacena la provincia que controla el paso."""
+    # Ejemplo: Conexión marítima controlada militarmente desde la provincia de Messina
     ruta_estrecho = Route(destination="IS", strait="messi")
 
     assert ruta_estrecho.destination == "IS"
@@ -148,7 +174,7 @@ def test_route_creation_with_strait():
 
 
 def test_location_routes_integration():
-    """Comprueba que Province y Sea heredan la lista de rutas y permiten añadir conexiones."""
+    """Province y Sea heredan la lista de rutas y permiten añadir conexiones."""
     roma = Province(name="Rome", city="city")
     mar_tirreno = Sea(name="Eastern Tyrrhenian Sea")
 
@@ -168,70 +194,67 @@ def test_location_routes_integration():
     assert len(roma.sea_routes) == 1
     assert roma.land_routes[0].destination == "tivol"
     assert roma.sea_routes[0].destination == "ETS"
-    
+
     assert len(mar_tirreno.sea_routes) == 1
     assert mar_tirreno.sea_routes[0].destination == "rome"
 
+
 def test_location_exclude_routes():
     """Prueba la función que excluye rutas"""
-    test_location = Location(name='Savoy',
-        land_routes=[Route(destination='prove'),
-            Route(destination='saluz'),
-            Route(destination='turin'),
-            Route(destination='montf'),
-            Route(destination='genoa')],
-        sea_routes=[Route(destination='prove S'),
-            Route(destination='genoa'), Route(destination='EGOL')])
-    
-    test_location.exclude_routes(['prove'])
+    test_location = Location(
+        name="Savoy",
+        land_routes=[
+            Route(destination="prove"),
+            Route(destination="saluz"),
+            Route(destination="turin"),
+            Route(destination="montf"),
+            Route(destination="genoa"),
+        ],
+        sea_routes=[
+            Route(destination="prove S"),
+            Route(destination="genoa"),
+            Route(destination="EGOL"),
+        ],
+    )
 
-    destinations = [r.destination for r in test_location.land_routes + test_location.sea_routes]
+    test_location.exclude_routes(["prove"])
 
-    assert 'prove' not in destinations
-    assert 'prove S' not in destinations
-    assert 'turin' in destinations
+    destinations = [
+        r.destination for r in test_location.land_routes + test_location.sea_routes
+    ]
 
-def test_map_loading_separates_land_and_sea(mock_json_data):
-    """Comprueba que el mapa lee el JSON, clasifica la geografía y carga sus rutas."""
-    with patch("machiavelli.map.json.load", return_value=mock_json_data), patch(
-        "builtins.open"
-    ):
-        game_map = Map.load_map()
+    assert "prove" not in destinations
+    assert "prove S" not in destinations
+    assert "turin" in destinations
 
-    assert "rome" in game_map.provinces
-    assert "ETS" in game_map.seas
-
-    # Verificamos que Roma tenga conexiones cargadas desde el archivo
-    roma = game_map.provinces["rome"]
-    assert len(roma.land_routes) > 0
-    assert roma.land_routes[0].destination == "tivol"
-
-    # Verificamos que las rutas de mar también se hayan poblado
-    mar_tirreno = game_map.seas["ETS"]
-    assert len(mar_tirreno.sea_routes) > 0
 
 def test_map_loading_excludes_routes_to_excluded_locations(mock_json_data):
-    """Comprueba que si una localización se excluye, las rutas hacia ella también se eliminan."""
-    with patch("machiavelli.map.json.load", return_value=mock_json_data), patch(
-        "builtins.open"
+    """Comprueba que si una localización se excluye, las rutas hacia ella también."""
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
     ):
         game_map = Map.load_map(exclude_ids=["tivol"])
 
     # Certificamos que Tivoli efectivamente no se ha procesado
     assert "tivol" not in game_map.provinces
 
-    # Inspeccionamos Roma, que originalmente conectaba con 'tivol' y con 'ETS' (Mar Tirreno)
+    # Inspeccionamos Roma, que originalmente conectaba con 'tivol' y con 'ETS'
     roma = game_map.provinces["rome"]
-    
+
     # La ruta hacia 'tivol' debe haber sido interceptada por el filtro
-    destinos_de_roma = [route.destination for route in roma.land_routes + roma.sea_routes]
+    destinos_de_roma = [
+        route.destination for route in roma.land_routes + roma.sea_routes
+    ]
     assert "tivol" not in destinos_de_roma
     assert "ETS" in destinos_de_roma
 
+
 def test_map_loading_excludes_double_coasts_by_base_id(mock_json_data):
-    """Comprueba que excluir la raíz 'prove' elimina sus costas y limpia las rutas hacia ellas."""
-    with patch("machiavelli.map.json.load", return_value=mock_json_data), patch(
-        "builtins.open"
+    """Excluir 'prove' elimina sus costas y limpia las rutas hacia ellas."""
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
     ):
         # Excluimos la provincia 'prove'
         game_map = Map.load_map(exclude_ids=["prove"])
@@ -242,26 +265,115 @@ def test_map_loading_excludes_double_coasts_by_base_id(mock_json_data):
     # las rutas a 'prove S' se han eliminado de WGOL y EGOL
     wgol = game_map.seas["WGOL"]
     from_wgol = [route.destination for route in wgol.sea_routes]
-    
+
     assert "prove S" not in from_wgol
     assert "EGOL" in from_wgol
 
+
 def test_map_exclude_locations(mock_json_data):
     """Excluimos 'prove' una vez ya creado el mapa."""
-    with patch("machiavelli.map.json.load", return_value=mock_json_data), patch(
-        "builtins.open"
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
     ):
         # Excluimos la provincia 'prove'
         game_map = Map.load_map()
 
     game_map.exclude_locations(["prove"])
-    
+
     # 'prove S' ha sido eliminado de provinces
     assert "prove S" not in game_map.provinces
 
     # las rutas a 'prove S' se han eliminado de WGOL y EGOL
     wgol = game_map.seas["WGOL"]
     from_wgol = [route.destination for route in wgol.sea_routes]
-    
+
     assert "prove S" not in from_wgol
     assert "EGOL" in from_wgol
+
+
+### A PARTIR DE AQUÍ LO TENGO REFACTORIZADO. TODO: REPASAR LOS ANTERIORES
+
+
+def test_adjacent_locations_default_both_modes(mock_json_data):
+    """Comprueba que por defecto (MovementMode.BOTH) devuelve rutas de tierra y mar."""
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
+    ):
+        game_map = Map.load_map()
+
+    adjacent = game_map.adjacent_locations("rome")
+
+    assert "tivol" in adjacent
+    assert "ETS" in adjacent
+
+
+def test_adjacent_locations_land_mode_only(mock_json_data):
+    """Comprueba que MovementMode.LAND solo devuelve las rutas terrestres."""
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
+    ):
+        game_map = Map.load_map()
+
+    adjacent = game_map.adjacent_locations("rome", mode=MovementMode.LAND)
+
+    assert "tivol" in adjacent
+    assert "ETS" not in adjacent
+
+
+def test_adjacent_locations_sea_mode_only(mock_json_data):
+    """Comprueba que MovementMode.SEA solo devuelve las rutas marítimas."""
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
+    ):
+        game_map = Map.load_map()
+
+    adjacent = game_map.adjacent_locations("rome", mode=MovementMode.SEA)
+
+    assert "ETS" in adjacent
+    assert "tivol" not in adjacent
+
+
+def test_adjacent_locations_double_coast_base_in_both_mode(mock_json_data):
+    """Comprueba que los destinos de las costas se añaden al listado."""
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
+    ):
+        game_map = Map.load_map()
+
+    adjacent = game_map.adjacent_locations("prove", mode=MovementMode.BOTH)
+
+    assert "avign" in adjacent
+    assert "WGOL" in adjacent
+    assert "EGOL" in adjacent
+
+
+def test_adjacent_locations_double_coast_destination_normalizes_to_base(mock_json_data):
+    """Comprueba que si una ruta marítima llega a una costa se incluye la base."""
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
+    ):
+        game_map = Map.load_map()
+
+    # WGOL tiene ruta hacia 'prove S'
+    adjacent = game_map.adjacent_locations("WGOL", mode=MovementMode.BOTH)
+
+    assert "prove S" in adjacent
+    assert "prove" in adjacent
+
+
+def test_adjacent_locations_invalid_origin_raises_keyerror(mock_json_data):
+    """Comprueba que si el origen no existe en el mapa se lanza KeyError."""
+    with (
+        patch("machiavelli.map.json.load", return_value=mock_json_data),
+        patch("builtins.open"),
+    ):
+        game_map = Map.load_map()
+
+    with pytest.raises(KeyError):
+        game_map.adjacent_locations("invalid_id")

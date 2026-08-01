@@ -20,7 +20,6 @@ Los dos bots necesitan los siguientes permisos:
 - Manage Messages
 - Read Message History
 - Use Application Commands
-- Attach Files
 
 Estos son los que tendré que utilizar para obtener el token del bot.
 
@@ -33,13 +32,12 @@ Los parámetros que necesita el bot los fijamos en un fichero .env. Se puede tom
 
 ```env
 DISCORD_TOKEN=tu_token_aqui
-ADMIN_ROLE_NAME=Juez
 DATABASE_PATH=game.db
 ```
 
 ## Versión
 
-La versión actual de desarrollo es la 0.3.0. La versión actual de producción es la 0.3.0.
+La versión actual de desarrollo es la 0.5.0. La versión actual de producción es la 0.4.2.
 
 ## Comandos disponibles
 
@@ -124,15 +122,25 @@ Introduce gastos para un jugador determinado.
 
 Se prevén las siguientes versiones
 
-### Versión 0.4.1
+### Versión 0.5.0
 
-- [ ] Corrección de los bugs más importantes.
+- [X] Implementación de la ejecución de turnos de campaña.
+  - [X] Nuevo módulo events para almacenar los eventos de un turno, sin que el resto de módulos necesite formatearlos.
+  - [X] Nuevo package machiavelli.engine con clase GameEngine y relacionadas, responsable de la lógica de la partida.
+- [X] Desarrollar un juego de tests más exhaustivo para evitar errores incontrolados en la ejecución de los turnos.
+  - [X] Tests para el package machiavelli.engine
+- [X] Incorporación de un sistema de logging. Funcional, pero su uso irá extendiéndose a lo largo de las versiones.
 
 ### Desarrollos futuros
 
 Cambios que afectan a los comandos del bot. Los cambios se irán incorporando a las versiones conforme se completen.
 
-- [ ] Ejecutar todas las acciones del turno. Actualmente solo hace el setup inicial
+- [ ] Ejecutar todas las acciones del turno. Todavía faltan:
+  - [ ] Asesinatos.
+  - [ ] Bajas por Hambre.
+  - [ ] Comandos militares.
+  - [ ] Resolución de conflictos.
+  - [ ] Tratamiento del fin de partida.
 - [ ] Hacer que el reporte incluya un mapa gráfico con la posición de las unidades en él
 
 ## Histórico de versiones
@@ -158,3 +166,6 @@ Cambios que afectan a los comandos del bot. Los cambios se irán incorporando a 
   Se expanden `/mach cmd`, `/mach cmdlist` y `/shar cmd_user` para tratar las órdenes de una campaña, y se añaden
   los nuevos comandos `/mach expense` y `/shar expense_user` para enviar los gastos para el turno actual, que se
   separan del envío de órdenes a las tropas.
+- Versión 0.4.1: Corrección de algunos bugs importantes.
+- Versión 0.4.2: Corrección de un bug en el envío de órdenes de conversión.
+  
