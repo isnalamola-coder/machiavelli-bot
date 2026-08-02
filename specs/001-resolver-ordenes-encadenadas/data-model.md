@@ -54,6 +54,9 @@ Orden lógica compilada e inmutable.
 **Validación**:
 
 - Una orden inválida se reemplaza por una nueva orden Hold; no se muta la original.
+- Support acepta exactamente `<lugar>` o `<lugar> (<potencia>)`; se retiran los
+  paréntesis al guardar `supported_faction`. Transport acepta exactamente
+  `A <origen>` y se resuelve contra `army_by_origin`.
 - Un convoy contiene al menos origen, una posición intermedia y provincia final.
 - Cada posición intermedia se enlaza a una flota Transport del ejército correcto.
 - Una flota solo puede tener un `transported_army`.
@@ -64,18 +67,47 @@ Punto de evaluación inmutable.
 
 | Campo | Tipo lógico | Significado |
 |---|---|---|
-| `active_supports` | conjunto de `UnitKey` | Support todavía eficaz |
-| `available_convoys` | conjunto de `UnitKey` | Ejércitos con todas sus flotas disponibles |
-| `successful_moves` | conjunto de `UnitKey` | Advance ganadores |
-| `successful_conversions` | conjunto de `UnitKey` | Convert ganadores |
-| `dislodged_units` | conjunto de `UnitKey` | Unidades que perdieron su ocupación |
-| `cancelled_orders` | conjunto de `UnitKey` | Órdenes que ya no se ejecutan |
-| `cancelled_by_self_conflict` | conjunto de `UnitKey` | Subconjunto cancelado por facción propia |
-| `effective_positions` | pares `UnitKey → str | None` | Posición usada en la iteración |
-| `resolved_conflicts` | conjunto de `str` | Espacios ya decididos |
+| `active_supports` | `frozenset[UnitKey]` | Support todavía eficaz |
+| `available_convoys` | `frozenset[UnitKey]` | Ejércitos con todas sus flotas disponibles |
+| `successful_moves` | `frozenset[UnitKey]` | Advance ganadores |
+| `successful_conversions` | `frozenset[UnitKey]` | Convert ganadores |
+| `dislodged_units` | `frozenset[UnitKey]` | Unidades que perdieron su ocupación |
+| `cancelled_orders` | `frozenset[UnitKey]` | Órdenes que ya no se ejecutan |
+| `cancelled_by_self_conflict` | `frozenset[UnitKey]` | Subconjunto cancelado por facción propia |
+| `effective_positions` | `tuple[tuple[UnitKey, str | None], ...]` | Pares ordenados por clave de unidad |
+| `resolved_conflicts` | `frozenset[str]` | Espacios ya decididos |
 
 La firma incluye todos los campos anteriores convertidos a tuplas primitivas
 ordenadas. La evaluación produce un objeto nuevo.
+
+## ResolutionSignature
+
+Representación canónica de un `ResolutionState`. Es una tupla anidada ordenada que
+contiene exclusivamente `str`, `int`, `bool`, `None` y otras tuplas primitivas. Cada
+campo aparece con un nombre estable y los `UnitKey` se representan como
+`(player_id or "", unit_type, origin)`.
+
+La firma no puede contener objetos `Player`, diccionarios, sets sin ordenar,
+`repr()`, valores de `hash()` ni identidad de objetos. Se usa tanto para detectar
+estabilidad/ciclos como para construir el diagnóstico reproducible.
+
+## CycleDiagnostic
+
+Diagnóstico interno e inmutable de un ciclo sin regla determinista restante.
+
+| Campo | Tipo | Regla |
+|---|---|---|
+| `stage` | `str` | `targeted-support-cancellation-exhausted` o `all-support-cancellation-exhausted` |
+| `first_seen_iteration` | `int` | Primera iteración en la que apareció la firma repetida |
+| `repeated_iteration` | `int` | Iteración posterior que vuelve a producirla; mayor que la anterior |
+| `pending_conflicts` | `tuple[str, ...]` | Claves de conflicto pendientes, ordenadas y sin duplicados |
+| `state_signature` | `ResolutionSignature` | Firma canónica exacta usada para detectar el ciclo |
+
+Se implementa con `@dataclass(frozen=True, slots=True)`. Forma parte de
+`UnresolvedMilitaryConflict` como atributo `diagnostic`, se registra solo en logging
+y nunca se muestra al usuario de Discord. Entradas semánticamente iguales deben
+producir un `CycleDiagnostic` igual aunque cambie el orden de jugadores,
+colecciones, diccionarios o cargas sucesivas.
 
 ## UnitOutcome
 
@@ -103,6 +135,30 @@ Contrato inmutable entre adjudicador, orquestación y gestor de desalojos.
 Las unidades desalojadas se obtienen filtrando `outcomes`. El resultado no contiene
 decisiones de retirada ni muta `Game` por sí solo.
 
+## MilitaryEventRecord
+
+Registro auditable construido y validado antes de aplicar la resolución. Usa el
+campo de texto existente de `game_events`, sin cambio de esquema:
+
+```text
+military_resolution|<JSON compacto con claves ordenadas>
+```
+
+El JSON contiene exactamente estas listas, también ordenadas:
+
+| Clave | Elemento primitivo |
+|---|---|
+| `outcomes` | `[[player_id, unit_type, origin], final_unit_type, final_location, dislodged]` |
+| `cancelled_orders` | `[player_id, unit_type, origin]` |
+| `broken_convoys` | `[player_id, unit_type, origin]` del ejército |
+| `dislodgements` | `[player_id, unit_type, origin]` |
+| `rebellions` | `[player_id, "province" | "city", location, "subdued" | "liberated"]` |
+| `sieges` | `[[player_id, unit_type, origin], location, "started" | "completed" | "lifted"]` |
+
+`player_id` usa `null` para guarniciones independientes. La serialización usa claves
+ordenadas, separadores compactos y Unicode sin escapar. Los eventos preexistentes
+conservan su representación actual; solo el nuevo evento militar usa este prefijo.
+
 ## Decisiones de desalojo externas
 
 El gestor devuelve un mapping:
@@ -112,9 +168,11 @@ El gestor devuelve un mapping:
 | `UnitKey` desalojada | `str` | Destino de retirada elegido |
 | `UnitKey` desalojada | `None` | Unidad eliminada por las reglas del gestor |
 
-El mapping debe contener exactamente todas las unidades desalojadas y ninguna otra.
-La política de destino, colisiones entre retiradas y guarniciones independientes
-pertenece al gestor externo.
+El mapping debe contener exactamente todas las unidades desalojadas y ninguna otra,
+incluidas las guarniciones independientes. La política de destino, colisiones y
+retirada de estas guarniciones pertenece al gestor externo. Si no existe un gestor
+con esa política o falta su entrada, la resolución aborta y el snapshot completo
+permanece intacto; no se crea una colección persistida de pendientes.
 
 ## Índices internos
 
@@ -146,10 +204,11 @@ Game/Player inicial
   → órdenes compiladas
   → órdenes enlazadas y validadas
   → estados de resolución inmutables
+  → ResolutionSignature y CycleDiagnostic si no existe progreso determinista
   → MilitaryResolution
   → decisiones del gestor si hay desalojos
-  → colecciones finales validadas
-  → asignación atómica a Game/Player
+  → colecciones finales y MilitaryEventRecord validados
+  → asignación atómica de Game/Player/evento
 ```
 
 Un error en cualquier transición anterior a la última conserva todas las
@@ -158,6 +217,8 @@ colecciones militares del snapshot.
 ## Estado persistido afectado
 
 - `commands`: solo cambia el orden de lectura por el `id` existente.
+- `game_events`: conserva tabla y columna; añade el nuevo registro textual prefijado
+  `military_resolution|` con payload determinista.
 - `players.armies`, `players.fleets`, `players.garrisons`, rebeliones: se guardan con
   el mecanismo existente después de completar la campaña.
 - `games.independent_garrisons` y `games.besieges`: se reconstruyen y guardan con el

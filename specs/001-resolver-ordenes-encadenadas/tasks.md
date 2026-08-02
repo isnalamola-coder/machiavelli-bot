@@ -37,16 +37,19 @@ implementador:
 - Definir en `machiavelli/engine/military.py` la jerarquía
   `MilitaryResolutionError`, `InvalidMilitaryState`,
   `UnresolvedMilitaryConflict` y `DislodgementResolverRequired`, todas derivadas de
-  la primera. Los errores del gestor externo que no sean ya
+  la primera. `UnresolvedMilitaryConflict` recibe un `CycleDiagnostic` inmutable en
+  el atributo `diagnostic`. Los errores del gestor externo que no sean ya
   `MilitaryResolutionError` se encadenan como `MilitaryResolutionError`.
 - Definir `type DislodgementResolver = Callable[[MilitaryResolution],
   Mapping[UnitKey, str | None]]` y conservar exactamente la firma pública
   `MilitaryResolver(game).run(dislodgement_resolver: DislodgementResolver | None =
   None) -> MilitaryResolution`.
 - Usar `@dataclass(frozen=True, slots=True)` para `UnitKey`, `MilitaryUnit`,
-  `MilitaryOrder`, `ResolutionState`, `UnitOutcome` y `MilitaryResolution`. Sus
-  campos y tipos son exactamente los de `data-model.md`; los valores de colección
-  que atraviesan fases son `tuple` o `frozenset`, nunca listas o sets mutables.
+  `MilitaryOrder`, `ResolutionState`, `CycleDiagnostic`, `UnitOutcome` y
+  `MilitaryResolution`. Sus campos y tipos son exactamente los de `data-model.md`:
+  los conjuntos de
+  `ResolutionState` son `frozenset` y `effective_positions` es
+  `tuple[tuple[UnitKey, str | None], ...]` ordenada; no usar colecciones mutables.
 - Sustituir `conflicts_map` y la mutación incremental por estos pasos privados, en
   este orden: `_build_unit_index()`, `_compile_orders()`,
   `_link_and_validate_orders()`, `_resolve_conflicts()`, `_build_resolution()`,
@@ -57,7 +60,12 @@ implementador:
   actor, adyacencia o localización final de una flota.
 - La firma de estado contiene tuplas primitivas ordenadas para todos los campos de
   `ResolutionState`; no usa hashes de proceso, orden de diccionarios ni identidad de
-  objetos.
+  objetos. `CycleDiagnostic` conserva exactamente esa firma, la etapa agotada, las
+  iteraciones de primera aparición/repetición y los conflictos pendientes ordenados.
+- Parsear Support solo como `<lugar>` o `<lugar> (<potencia>)`, retirando los
+  paréntesis para `supported_faction`; parsear Transport solo como `A <origen>` y
+  resolverlo mediante `army_by_origin`. Cualquier otra gramática produce Hold
+  inválido para el emisor.
 - Las pruebas de `tests/machiavelli/engine/test_military.py` comprueban resultados
   públicos y snapshots completos. Solo prueban directamente los métodos privados de
   índice, compilación y firma cuando eso evita construir una campaña completa.
@@ -67,12 +75,26 @@ implementador:
 - Reutilizar una sola factoría de escenarios y una sola función de snapshot en
   `tests/machiavelli/engine/helpers.py`; no crear una fixture o clase por regla.
 - El evento militar usa `EventType.MILITARY_RESOLUTION` y un único
-  `TurnEvent.military_resolution(...)`. Su `data` contiene listas primitivas
-  ordenadas bajo las claves `outcomes`, `cancelled_orders`, `broken_convoys`,
-  `dislodgements`, `rebellions` y `sieges`.
+  `TurnEvent.military_resolution(...)`. Su `data` contiene las seis listas primitivas
+  definidas en `data-model.md`; `TurnEvent.to_record()` devuelve
+  `military_resolution|` más JSON compacto con claves ordenadas y Unicode sin
+  escapar. Para cualquier tipo anterior devuelve exactamente `str(event.type)`.
+- `Game.add_event()` añade `turn_event.to_record()` a `game.turn_events`; así los
+  eventos anteriores no cambian y el militar conserva su payload. El registro se
+  construye y valida antes del commit y la nueva lista `turn_events` forma parte de
+  la misma asignación final que las colecciones militares.
 - No implementar selección de retiradas, persistencia de retiradas ni política de
-  guarniciones independientes. El callable externo decide el mapping; el resolver
-  solo valida cobertura exacta, destinos, colisiones y atomicidad.
+  guarniciones independientes. El callable externo debe devolver también una
+  decisión explícita para cada independiente desalojada; sin gestor o entrada, el
+  resolver aborta y conserva el snapshot, sin crear una colección de pendientes.
+- Extraer en `machiavelli/discord.py` una función síncrona privada que abra SQLite,
+  cargue `Game`, ejecute `GameEngine`, construya el reporte, guarde y devuelva
+  `tuple[str, ...]`; `run_game` la invoca una sola vez con `asyncio.to_thread()`.
+  Conexión, `Game`, `Player` y gestor permanecen en el worker y ninguna API Discord
+  se invoca desde él.
+- Traducir las excepciones militares solo en el límite Discord: todas usan el prefijo
+  común de atomicidad y una orientación específica para estado inválido, ciclo,
+  gestor ausente o error militar genérico. El dominio no contiene mensajes Discord.
 
 ---
 
@@ -91,7 +113,7 @@ del estado militar para todas las historias.
 
 **⚠️ CRITICAL**: Esta fase bloquea las matrices de aceptación posteriores.
 
-- [ ] T002 Añadir a `tests/machiavelli/engine/helpers.py` `create_military_game(...)`, que construya `Game` y `Player` reales con mapa inyectado, órdenes y todas las colecciones militares, y `military_snapshot(game)`, que devuelva una tupla primitiva ordenada de ejércitos, flotas, guarniciones, guarniciones independientes, asedios, rebeliones y eventos; mantener intactos los helpers usados por otras suites
+- [ ] T002 Añadir a `tests/machiavelli/engine/helpers.py` `create_military_game(...)`, que construya `Game` y `Player` reales con mapa inyectado, órdenes y todas las colecciones militares, y `military_snapshot(game)`, que devuelva una tupla primitiva ordenada de ejércitos, flotas, guarniciones, guarniciones independientes, asedios, rebeliones y eventos; definir además `MilitaryOrdering` como `@dataclass(frozen=True, slots=True)`, una colección acotada de variantes de orden incidental y `iter_military_orderings(factory)`, que cree un `Game` fresco por variante y pueda invertir jugadores y colecciones físicas sin alterar el orden relativo de los Advance de un mismo actor; mantener intactos los helpers usados por otras suites
 
 **Checkpoint**: Todas las historias pueden reutilizar el mismo escenario y demostrar
 atomicidad sin comparar objetos `Mock` incompletos.
@@ -111,20 +133,22 @@ mismos `MilitaryResolution`, evento y colecciones bajo permutaciones de jugadore
 ### Tests for User Story 1
 
 - [ ] T003 [US1] Reemplazar en `tests/machiavelli/engine/test_military.py` las pruebas de `conflicts_map` por `TestMilitaryModelsAndIndex` con subtests que verifiquen igualdad/hash de `UnitKey`, conservación de costa, índices de ejército/flota/guarnición independiente, separación provincia/`G provincia`, y `InvalidMilitaryState` para clave duplicada, ocupación provincial normalizada duplicada y dos guarniciones en la misma ciudad
-- [ ] T004 [US1] Añadir en `tests/machiavelli/engine/test_military.py` `TestOrderCompilation` con casos para los siete códigos `A/B/H/L/S/T/C`, Hold por ausencia de fila, Hold más entrada en `invalid_orders` para código/target/combinación inválida de un actor existente, fila de actor inexistente ignorada sin afectar otras unidades, aislamiento del error a una sola unidad, Advance directo por modo `LAND`/`SEA`, conversión `A|F -> G` y `G -> A|F`, costa exacta y ausencia total de mutaciones durante índice/compilación
-- [ ] T005 [US1] Añadir en `tests/machiavelli/engine/test_military.py` `TestAtomicResolution` con una victoria, empate de máximos, conversión ganadora/perdedora, una permutación de jugadores y colecciones, snapshot corrupto y excepción inyectada antes del commit; afirmar un `UnitOutcome` por unidad, ausencia de ocupaciones duplicadas, igualdad exacta de resolución/evento entre permutaciones y snapshot inicial intacto en todos los fallos
+- [ ] T004 [US1] Añadir en `tests/machiavelli/engine/test_military.py` `TestOrderCompilation` con casos para los siete códigos `A/B/H/L/S/T/C`, Support propio `<lugar>`, Support ajeno `<lugar> (<potencia>)`, paréntesis/potencia/componentes inválidos, Transport `A <origen>` propio/ajeno y gramática inválida, Hold por ausencia de fila, Hold más `invalid_orders` para código/target/combinación inválida de actor existente, y fila huérfana posterior a compra, desbandada o cambio de propiedad cuya clave `(player_id, actor)` no existe en `actor_to_unit`; afirmar que esta última se descarta sin entrar en `invalid_orders`, sin transferirse al nuevo propietario y sin afectar a otras unidades, y que una unidad actual sin orden válida propia recibe Hold; cubrir además Advance directo `LAND`/`SEA`, conversiones, costa exacta y cero mutaciones durante índice/compilación
+- [ ] T005 [US1] Añadir `TestAtomicResolution` en `tests/machiavelli/engine/test_military.py` con victoria, empate, conversión ganadora/perdedora y conversión empatada contra un Advance enemigo de igual fuerza; en este último caso afirmar que ambas órdenes se cancelan, la guarnición conserva tipo y ciudad, el atacante conserva su origen y no hay ocupaciones finales duplicadas; incluir también Support no dependiente que decide fuerza, permutación de jugadores/colecciones, snapshot corrupto y fallos inyectados al construir y serializar el evento; inyectar además un `ResolutionState` incompleto devuelto por `_resolve_conflicts()` con al menos un conflicto efectivo pendiente y afirmar que `run()` lanza `MilitaryResolutionError` antes de llamar al gestor, construir o añadir el evento o sustituir colecciones; añadir en `tests/machiavelli/test_game.py` un round-trip que guarde/cargue `military_resolution|<JSON>` y recupere las seis listas; afirmar un `UnitOutcome` por unidad, evento idéntico entre permutaciones y estado/eventos iniciales intactos en cada fallo
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] Sustituir `MilitaryUnit` mutable y añadir la jerarquía de errores, `UnitKey`, `MilitaryUnit`, `MilitaryOrder`, `ResolutionState`, `UnitOutcome`, `MilitaryResolution` y `DislodgementResolver` definidos en el contrato cerrado dentro de `machiavelli/engine/military.py`; usar tipos modernos de Python 3.13, excepciones específicas y ningún `except` genérico silencioso
+- [ ] T006 [US1] Sustituir `MilitaryUnit` mutable y añadir la jerarquía de errores, `UnitKey`, `MilitaryUnit`, `MilitaryOrder`, `ResolutionState`, `CycleDiagnostic`, `UnitOutcome`, `MilitaryResolution` y `DislodgementResolver` definidos en el contrato cerrado dentro de `machiavelli/engine/military.py`; `UnresolvedMilitaryConflict` debe exigir y conservar `diagnostic`, usar tipos modernos de Python 3.13, excepciones específicas y ningún `except` genérico silencioso
 - [ ] T007 [US1] Implementar `conflict_location()` y `MilitaryResolver._build_unit_index()` en `machiavelli/engine/military.py`; poblar sin sobrescrituras `units_by_key`, `actor_to_unit`, `army_by_origin` y `fleet_by_conflict_location`, validar duplicados antes de leer `player.commands` y ordenar claves mediante `(player_id or "", unit_type, origin)`
-- [ ] T008 [US1] Implementar `_compile_orders()` y la validación no dependiente de convoy en `_link_and_validate_orders()` dentro de `machiavelli/engine/military.py`; agrupar filas por `(player_id, actor)` conservando orden, producir exactamente un `MilitaryOrder` por unidad, representar los siete códigos, aplicar Hold efectivo a ausencia/orden individual inválida y conservar el motivo en `invalid_orders`
-- [ ] T009 [US1] Implementar en `machiavelli/engine/military.py` la evaluación básica de posiciones, Advance directos, Hold y Convert, incluyendo ciudad/provincia como conflictos distintos, fuerza base, empate de máximos y validación de `UnitOutcome`; construir todas las listas finales en variables locales y rechazar unidad sin outcome, ejército en mar, costa inválida, convoy parcial u ocupación final duplicada
-- [ ] T010 [P] [US1] Añadir `EventType.MILITARY_RESOLUTION` y la factoría `TurnEvent.military_resolution(...)` en `machiavelli/events.py`; convertir claves, outcomes y cambios a listas de valores primitivos ordenadas con las seis claves fijadas en el contrato cerrado
-- [ ] T011 [US1] Implementar `_build_resolution()`, `_build_final_collections()`, `_apply_final_collections()` y el flujo de `run()` sin desalojos en `machiavelli/engine/military.py`; asignar todas las colecciones una única vez, emitir exactamente un evento después del commit y registrar con `logging.getLogger(__name__)` la misma información reproducible sin datos Discord ni detalles sensibles
+- [ ] T008 [US1] Implementar `_compile_orders()` y la validación no dependiente de convoy en `_link_and_validate_orders()` dentro de `machiavelli/engine/military.py`; consultar `actor_to_unit` antes de agrupar cada fila por `(player_id, actor)`, conservar el orden relativo de las filas válidas y descartar las huérfanas sin añadirlas a `invalid_orders` ni atribuirlas a otro jugador; producir después exactamente un `MilitaryOrder` por unidad, parsear la gramática exacta de Support/Transport, validar geometría de Support con `LAND`/`SEA` y guarnición en su provincia, representar los siete códigos, aplicar Hold a toda unidad actual sin orden válida y conservar en `invalid_orders` únicamente el motivo de una orden inválida asociada a una unidad existente
+- [ ] T009 [US1] Implementar en `machiavelli/engine/military.py` la evaluación básica de posiciones, Advance directos, Hold, Convert y Supports válidos cuyos emisores no dependan de conflictos pendientes; separar ciudad/provincia, sumar fuerza base + Support, resolver empate de máximos y validar `UnitOutcome`; reutilizar el mismo constructor de conflictos para obtener de forma canónica las claves efectivas no incluidas en `resolved_conflicts`; construir listas finales locales y rechazar conflictos pendientes, unidad sin outcome, ejército en mar, costa inválida, convoy parcial u ocupación final duplicada mediante errores militares tipados
+- [ ] T010 [P] [US1] Añadir `EventType.MILITARY_RESOLUTION`, `TurnEvent.military_resolution(...)` y `TurnEvent.to_record()` en `machiavelli/events.py`; producir exactamente las seis listas primitivas de `data-model.md`, serializar solo el evento militar con prefijo `military_resolution|`, claves ordenadas, separadores compactos y `ensure_ascii=False`, y devolver `str(type)` sin payload para todos los eventos anteriores
+- [ ] T011 [US1] Implementar `_build_resolution()`, `_build_final_collections()`, `_apply_final_collections()` y `run()` sin desalojos en `machiavelli/engine/military.py`, y cambiar `Game.add_event()` en `machiavelli/game.py` para usar `TurnEvent.to_record()`; inmediatamente después de `_resolve_conflicts()`, validar que no queda ningún conflicto efectivo pendiente y lanzar `MilitaryResolutionError` antes de outcomes, gestor, evento o colecciones finales si la resolución está incompleta; construir y validar el registro antes del commit, incluir la nueva lista de eventos en la misma asignación final que todas las colecciones y registrar con `logging.getLogger(__name__)` el contexto reproducible sin datos sensibles
 
-**Checkpoint**: US1 pasa por sí sola y constituye el MVP atómico; Support puede estar
-compilado, pero sus dependencias avanzadas se completan en US3.
+**Checkpoint**: Esta fase entrega el núcleo atómico de US1 con Support
+geométricamente válido y no dependiente. La aceptación completa de US1 permanece
+bloqueada por la propagación y los ciclos de US3 y por la retirada inmediata de US5;
+se verifica en la puerta integrada de Phase 9.
 
 ---
 
@@ -138,7 +162,7 @@ solo en origen; nunca ocupan tramos intermedios ni generan cruces de convoy.
 
 ### Tests for User Story 2
 
-- [ ] T012 [US2] Añadir `TestConvoyCompilationAndResolution` en `tests/machiavelli/engine/test_military.py` con subtests para una/dos flotas, transportadora extranjera, filas intercaladas, ruta repetida finita, declaración T inversa correcta, T ausente/equivocada/duplicada, tramo no adyacente, destino final marítimo, único Advance no terrestre, flota situada solo en destino y convoy opuesto a movimiento directo; afirmar ruta completa, transportadoras únicas para dependencia, cero ocupación/conflicto intermedio y ausencia de cruce para convoy
+- [ ] T012 [US2] Añadir `TestConvoyCompilationAndResolution` en `tests/machiavelli/engine/test_military.py` con subtests para una/dos flotas, transportadora extranjera, filas intercaladas, ruta repetida finita, T inversa correcta, T ausente/equivocada/duplicada, tramo no adyacente, destino marítimo, único Advance no terrestre, flota solo en destino, convoy opuesto a movimiento directo y transportadora atacada con cuatro resultados separados: desalojada, empate, ataque fallido y victoria defensiva; afirmar que solo el desalojo rompe el convoy, además de ruta completa, dependencias únicas, cero conflicto intermedio y ausencia de cruce
 
 ### Implementation for User Story 2
 
@@ -162,15 +186,15 @@ cancelación de todos los Supports o aborta sin commit si reaparece una firma pr
 
 ### Tests for User Story 3
 
-- [ ] T017 [US3] Añadir `TestConflictConstructionAndSupport` en `tests/machiavelli/engine/test_military.py` con destino de una facción, disputa de dos facciones, autoconflicto, intercambio directo propio, cruce enemigo, provincia frente a ciudad, Support con facción omitida/explícita, guarnición apoyando provincia, apoyos distintos por extremo de cruce, Support cortado por ataque empatado y excepción cuando apoya el origen del atacante; afirmar fuerzas, cancelaciones y `contested_locations` exactos
+- [ ] T017 [US3] Añadir `TestConflictConstructionAndSupport` en `tests/machiavelli/engine/test_military.py` con destino de una facción, disputa de dos facciones, autoconflicto, intercambio directo propio, cruce enemigo, provincia frente a ciudad, Support con facción omitida/explícita, guarnición apoyando provincia, apoyos distintos por extremo de cruce, Support cortado por ataque empatado y excepción cuando apoya el origen del atacante; añadir un escenario causal donde un conflicto independiente desaloja al emisor de un Support y, tras reconstruir globalmente, ese Support desaparece y convierte la victoria apoyada en empate o derrota, afirmando desalojo único, orden cancelada, ausencia en `active_supports`, resultado físico y evento; añadir también un autoconflicto de Convert donde una guarnición intenta convertirse en ejército en una provincia ya ocupada por otro ejército propio, y afirmar que Convert queda en `cancelled_by_self_conflict`, ambas unidades conservan sus espacios, el caso no añade una disputa entre facciones y `contested_locations` permanece exacto
 - [ ] T018 [US3] Añadir `TestDependencyResolution` en `tests/machiavelli/engine/test_military.py` con una cadena independiente→Transport desalojada→convoy roto, una dependencia de Support, reconstrucción global y orden de entrada permutado; afirmar que solo se resuelven claves sin dependencias pendientes y que la resolución/cancelaciones finales no dependen del orden incidental
-- [ ] T019 [US3] Añadir `TestCyclesAndCancellationSemantics` en `tests/machiavelli/engine/test_military.py` con ataque directo y convoy disponible contra Support desde origen distinto, ataque desde el lugar apoyado, primera etapa insuficiente, segunda etapa cancelando todos los Supports, firma consecutiva estable y firma no consecutiva repetida; afirmar que una orden cancelada defiende físicamente pero no hace Hold, Support, Transport, Besiege, Lift siege, Convert ni somete rebelión, y que el último ciclo lanza `UnresolvedMilitaryConflict` sin mutación
+- [ ] T019 [US3] Añadir `TestCyclesAndCancellationSemantics` en `tests/machiavelli/engine/test_military.py` con ataque directo y convoy disponible contra Support desde origen distinto, ataque desde el lugar apoyado, primera etapa insuficiente, segunda etapa cancelando todos los Supports, firma consecutiva estable y firma no consecutiva repetida; afirmar que una orden cancelada defiende físicamente pero no hace Hold, Support, Transport, Besiege, Lift siege, Convert ni somete rebelión; ejecutar el ciclo irresoluble con orden normal, jugadores/colecciones permutados y carga sucesiva, capturar `UnresolvedMilitaryConflict` y comparar por igualdad su `CycleDiagnostic`, incluidas etapa, iteraciones, conflictos pendientes ordenados y firma formada solo por valores primitivos; afirmar además snapshot/eventos intactos y ausencia de direcciones, `repr()` o hashes de proceso
 
 ### Implementation for User Story 3
 
 - [ ] T020 [US3] Implementar en `machiavelli/engine/military.py` la construcción global de posiciones y conflictos por ronda, detección de cruces solo entre Advance directos, autoconflicto salvo intercambio propio válido, `contested_locations` solo con dos o más facciones y ambos extremos de cruces, y fuerza como base + Supports activos dirigidos a facción/lugar
-- [ ] T021 [US3] Implementar en `machiavelli/engine/military.py` dependencias de cada conflicto sobre emisores de Support y flotas Transport situados en conflictos pendientes; resolver todas las claves independientes en orden estable, cancelar Advance/Convert perdedores, todos los máximos empatados, órdenes de desalojados y Supports cortados, y reconstruir el tablero completo tras cada cambio
-- [ ] T022 [US3] Implementar en `machiavelli/engine/military.py` el desempate circular y la firma completa: primero cancelar cada Support atacado por Advance válido, activo y no cancelado desde origen distinto del lugar apoyado —directo o con convoy disponible y sin umbral de fuerza—; después cancelar todos los Supports restantes; aceptar solo firma consecutiva idéntica como estabilidad y lanzar `UnresolvedMilitaryConflict` ante firma no consecutiva repetida sin regla restante
+- [ ] T021 [US3] Implementar en `machiavelli/engine/military.py` dependencias de cada conflicto sobre emisores de Support y flotas Transport situados en conflictos pendientes; resolver todas las claves independientes en orden estable y, mediante una transición que produzca un nuevo `ResolutionState`, incorporar toda unidad recién desalojada a `dislodged_units` y `cancelled_orders`, excluirla de `active_supports`, recalcular `available_convoys` y `effective_positions`, cancelar Advance/Convert perdedores, todos los máximos empatados y Supports cortados, y reconstruir el tablero completo tras cada cambio; no ocultar un Support desalojado solo en el cálculo de fuerza ni mutar colecciones compartidas
+- [ ] T022 [US3] Implementar en `machiavelli/engine/military.py` el desempate circular y la firma completa: primero cancelar cada Support atacado por Advance válido, activo y no cancelado desde origen distinto del lugar apoyado —directo o con convoy disponible y sin umbral de fuerza—; después cancelar todos los Supports restantes; aceptar solo firma consecutiva idéntica como estabilidad y, ante firma no consecutiva repetida sin regla restante, construir `CycleDiagnostic` con etapa agotada, índices de primera aparición/repetición, conflictos pendientes ordenados y la firma canónica exacta, y lanzar `UnresolvedMilitaryConflict(diagnostic)`
 
 **Checkpoint**: Las tres historias P1 forman un adjudicador determinista con
 cancelaciones propagadas.
@@ -189,13 +213,13 @@ restricciones de conversión con resultados y evento exactos.
 ### Tests for User Story 4
 
 - [ ] T023 [US4] Añadir `TestRebellions` en `tests/machiavelli/engine/test_military.py` con rebelión provincial y urbana para conflicto provincial/urbano, controlador frente a otras facciones, ausencia de conflicto creado solo por rebelión, Hold explícito/por ausencia/por orden inválida, orden cancelada, Advance liberador y estado ya pacificado por gasto; afirmar modificador +1 solo a participantes provinciales elegibles y transiciones exactas de ambas listas de rebelión
-- [ ] T024 [US4] Añadir `TestSiegesAndRestrictedConversions` en `tests/machiavelli/engine/test_military.py` con guarnición y rebelión urbana, primer/segundo Besiege, Lift siege, asediador desalojado, flota en ciudad con/sin puerto, conversión bajo asedio, conversión/contratación hacia ciudad rebelde cerrada, órdenes permitidas del asediador y guarnición asediada; afirmar objetivo eliminado solo al segundo Besiege exitoso y conservación en levantamiento/desalojo
+- [ ] T024 [US4] Añadir `TestSiegesAndRestrictedConversions` en `tests/machiavelli/engine/test_military.py` con guarnición y rebelión urbana, primer/segundo Besiege, Lift siege, asediador desalojado, flota en ciudad con/sin puerto, Convert bajo asedio o hacia ciudad rebelde y órdenes permitidas del asediador/guarnición; añadir en `tests/machiavelli/test_game.py` una regresión de `spring_maintenance()` donde `R` para `G <provincia>` rebelada no añade guarnición ni descuenta ducados, mientras la misma orden sin rebelión sí recluta y cobra 3
 
 ### Implementation for User Story 4
 
 - [ ] T025 [US4] Integrar en la fuerza provincial de `machiavelli/engine/military.py` las rebeliones provinciales y urbanas dirigidas contra el controlador; no añadir participantes ni fuerza a `G provincia`, y calcular en colecciones locales pacificación ya aplicada, sometimiento solo por Hold efectivo exitoso y liberación solo por Advance exitoso de otra facción
 - [ ] T026 [US4] Implementar en `machiavelli/engine/military.py` la validación y transición de Besiege/Lift siege: ciudad fortificada y objetivo presente, puerto obligatorio para flota, restricciones de órdenes bajo asedio, primer Besiege añade provincia, segundo elimina guarnición/rebelión urbana, Lift o desalojo del asediador quita provincia sin eliminar objetivo
-- [ ] T027 [US4] Integrar en `machiavelli/engine/military.py` las restricciones de Convert por asedio y ciudad rebelde cerrada, validar rebeliones/asedios finales antes del commit y rellenar las listas ordenadas `rebellions` y `sieges` del único evento militar sin emitir eventos intermedios
+- [ ] T027 [US4] Integrar en `machiavelli/engine/military.py` las restricciones de Convert por asedio y ciudad rebelde cerrada, validar rebeliones/asedios finales y rellenar `rebellions`/`sieges` del evento; añadir en `Game.spring_maintenance()` de `machiavelli/game.py`, antes de cobrar o añadir una orden `R` de actor `G`, el rechazo cuando `unit_id in player.rebelled_cities`, sin modificar las demás reglas de reclutamiento
 
 **Checkpoint**: US4 cubre todas las transiciones P2 de rebelión, conversión y asedio.
 
@@ -212,15 +236,15 @@ ocurren después. Cualquier fallo conserva el snapshot y produce el mensaje segu
 
 ### Tests for User Story 5
 
-- [ ] T028 [US5] Añadir `TestDislodgementContract` en `tests/machiavelli/engine/test_military.py` con resultado sin desalojos, gestor ausente, gestor que lanza, mapping incompleto, clave extra, destino disputado, dos retiradas al mismo destino, eliminación `None`, retirada válida y guarnición independiente desalojada; afirmar llamada única previa al commit, cobertura exacta, snapshot intacto en fallo, identidad conservada y guarnición pendiente salvo decisión explícita del mapping
-- [ ] T029 [P] [US5] Ampliar `tests/machiavelli/engine/test_core.py` con pruebas de `GameEngine(game, dislodgement_resolver=None)`, paso exacto del callable a `MilitaryResolver.run`, orden militar→retirada completada→hambre→control, y parada ante `MilitaryResolutionError`; afirmar que attrition, control, clear_famine y spawn_plague no se invocan tras el error
-- [ ] T030 [P] [US5] Crear `tests/machiavelli/test_discord.py` con `unittest.IsolatedAsyncioTestCase`, `AsyncMock` y el callback real de `run_game`: afirmar `interaction.response.defer(ephemeral=True)`; en éxito, guardado, borrado de la respuesta diferida con `delete_original_response()` y publicación del reporte mediante `followup.send(..., ephemeral=False)`; en `GameNotFoundException`, edición separada de la respuesta original; y para cada subclase de `MilitaryResolutionError`, `logger.exception` más `edit_original_response(content="No se pudo resolver la fase militar; no se aplicó ningún cambio.")` sin followup, nombre de error, traceback, archivo ni línea
+- [ ] T028 [US5] Añadir `TestDislodgementContract` en `tests/machiavelli/engine/test_military.py` con resultado sin desalojos, gestor ausente, gestor que lanza, mapping incompleto, clave extra, destino disputado, dos retiradas al mismo destino, eliminación `None`, retirada válida y guarnición independiente desalojada; para esta última probar por separado ausencia de gestor, mapping sin su clave y decisión explícita, afirmando que los dos primeros abortan sin colección de pendientes ni cambio de snapshot y solo el tercero permite aplicar
+- [ ] T029 [P] [US5] Ampliar `tests/machiavelli/engine/test_core.py` con pruebas de `GameEngine(game, dislodgement_resolver=None)`, paso exacto del callable a `MilitaryResolver.run`, orden militar→retirada completada→hambre→control, y parada ante `MilitaryResolutionError`; usar un `side_effect` del resolver que sustituya las colecciones militares por un estado final reconocible y otro de `ControlManager.run` que capture las colecciones observadas, afirmando que control recibe el estado ya consolidado y nunca el snapshot militar anterior; afirmar además que attrition, control, clear_famine y spawn_plague no se invocan tras el error, sin volver a probar las reglas internas de hambre o control
+- [ ] T030 [P] [US5] Crear `tests/machiavelli/test_discord.py` con `unittest.IsolatedAsyncioTestCase`, `AsyncMock` y el callback real de `run_game`: probar por separado la función worker síncrona y afirmar que abre/cierra SQLite, carga, ejecuta, genera reporte, guarda y devuelve `tuple[str, ...]`; en la coroutine afirmar `interaction.response.defer(ephemeral=True)` y una sola llamada a `asyncio.to_thread()` con ruta/canal sin pasar conexión, `Game` ni `interaction`; en éxito, borrado de la respuesta diferida y publicación mediante `followup.send(..., ephemeral=False)`; en `GameNotFoundException`, edición separada; y para `InvalidMilitaryState`, `UnresolvedMilitaryConflict`, `DislodgementResolverRequired` y el error base, afirmar `logger.exception` y un mensaje efímero con el prefijo común más la orientación específica, sin followup, clase, traceback, archivo, línea ni `CycleDiagnostic`
 
 ### Implementation for User Story 5
 
-- [ ] T031 [US5] Completar en `machiavelli/engine/military.py` el flujo de desalojos de `run()`: construir primero `MilitaryResolution`, exigir gestor solo cuando haya `UnitOutcome.dislodged`, invocarlo una vez, validar mapping exacto, prohibir `contested_locations` y colisiones, aceptar `None`, combinar retiradas con las colecciones locales y no emitir evento ni asignar nada hasta superar todas las validaciones
+- [ ] T031 [US5] Completar en `machiavelli/engine/military.py` el flujo de desalojos de `run()`: construir `MilitaryResolution`, exigir e invocar una vez el gestor ante cualquier desalojada incluida independiente, validar mapping exacto, prohibir `contested_locations` y colisiones, aceptar `None`, combinar retiradas, construir/serializar el evento y no asignar colecciones ni eventos hasta superar todas las validaciones
 - [ ] T032 [P] [US5] Añadir a `GameEngine.__init__` el parámetro `dislodgement_resolver: DislodgementResolver | None = None`, guardarlo y pasarlo por nombre a `MilitaryResolver.run` en `machiavelli/engine/core.py`; no capturar `MilitaryResolutionError` en el motor para que la excepción detenga de forma natural hambre, control y cambio de estación
-- [ ] T033 [P] [US5] Importar `logging` y `MilitaryResolutionError`, crear `logger = logging.getLogger(__name__)` y ajustar `run_game` en `machiavelli/discord.py` para diferir siempre con `ephemeral=True`, borrar la respuesta original antes de publicar por followup el reporte exitoso con `ephemeral=False`, y añadir un `except MilitaryResolutionError` anterior al genérico que use `logger.exception` y `interaction.edit_original_response(content="No se pudo resolver la fase militar; no se aplicó ningún cambio.")` sin `format_error_with_location`; mantener `GameNotFoundException` en su rama propia editando la respuesta original
+- [ ] T033 [P] [US5] Importar `asyncio`, `logging` y la jerarquía militar, crear `logger = logging.getLogger(__name__)`, `_execute_game_turn(db_path, channel_id, *, dislodgement_resolver=None) -> tuple[str, ...]` y `_military_error_message(error) -> str` en `machiavelli/discord.py`; el worker debe abrir/cerrar SQLite, cargar, ejecutar `GameEngine`, generar reporte y guardar completamente en su hilo; ajustar `run_game` para diferir siempre con `ephemeral=True`, invocar una sola vez `await asyncio.to_thread(_execute_game_turn, ...)`, borrar la respuesta original antes de publicar el éxito con `ephemeral=False` y capturar `MilitaryResolutionError` antes del genérico usando `logger.exception` más `edit_original_response` con prefijo común y orientación por subclase; mantener `GameNotFoundException` separada y no usar `format_error_with_location` para errores militares
 - [ ] T034 [US5] Ejecutar `python -m pytest -q tests/machiavelli/engine/test_military.py -k "atomic or dislodg or retreat or unresolved"`, `python -m pytest -q tests/machiavelli/engine/test_core.py -k "military or dislodg or order"` y `python -m pytest -q tests/machiavelli/test_discord.py -k "run_game"`; corregir solo código de `machiavelli/engine/military.py`, `machiavelli/engine/core.py` y `machiavelli/discord.py` hasta que los tres grupos pasen
 
 **Checkpoint**: La campaña nunca consolida un estado militar incompleto ni ejecuta
@@ -238,11 +262,11 @@ mantienen la misma secuencia tras cargas repetidas y guardar-cargar-guardar.
 
 ### Tests for User Story 6
 
-- [ ] T035 [US6] Añadir a `tests/machiavelli/test_game.py` una prueba de consulta que exija literalmente `ORDER BY id ASC` y una prueba de integración con `sqlite3` temporal inicializada mediante `machiavelli.database.upgrade`: insertar órdenes intercaladas de dos actores y dos jugadores, cargar dos veces y ejecutar guardar-cargar-guardar; afirmar igualdad de las tuplas `(actor, command, target)` por jugador y ausencia de migración nueva
+- [ ] T035 [US6] Añadir a `tests/machiavelli/test_game.py` una prueba de consulta que exija literalmente `ORDER BY commands.id ASC` y una integración con `tempfile.TemporaryDirectory`, `sqlite3` y `machiavelli.database.upgrade`: insertar órdenes intercaladas de dos actores/jugadores, cargar dos veces y ejecutar guardar-cargar-guardar; afirmar igualdad de `(actor, command, target)` por jugador y ausencia de migración nueva
 
 ### Implementation for User Story 6
 
-- [ ] T036 [US6] Cambiar únicamente el `SELECT` de `Command.load_commands()` en `machiavelli/game.py` para añadir `ORDER BY id ASC`; no modificar `Command.save()`, `Player.save_commands()`, `machiavelli/database.py`, `_SCHEMA_VERSION` ni `_UPGRADES`
+- [ ] T036 [US6] Cambiar únicamente el `SELECT` de `Command.load_commands()` en `machiavelli/game.py` para añadir `ORDER BY commands.id ASC`; no modificar `Command.save()`, `Player.save_commands()`, `machiavelli/database.py`, `_SCHEMA_VERSION` ni `_UPGRADES`
 - [ ] T037 [US6] Ejecutar `python -m pytest -q tests/machiavelli/test_game.py -k "command and order"` y `python -m pytest -q tests/machiavelli/engine/test_military.py -k "compile or convoy"`; confirmar que la ruta compilada conserva el orden relativo después del round-trip
 
 **Checkpoint**: US6 cumple FR-007/FR-053 usando el `id` existente.
@@ -254,10 +278,20 @@ mantienen la misma secuencia tras cargas repetidas y guardar-cargar-guardar.
 **Purpose**: Verificar el presupuesto aprobado y la cobertura integrada sin añadir
 microbenchmarks ni pruebas duplicadas.
 
-- [ ] T038 Añadir `test_representative_resolution_budget` en `tests/machiavelli/engine/test_military.py` con exactamente 30 unidades, 60 filas, 20 lugares de conflicto y un convoy de 5 flotas; construir el escenario una vez, ejecutar cinco resoluciones desde snapshots equivalentes con `time.perf_counter()`, afirmar menos de 1 segundo por ejecución —no promedio— e igualdad exacta de firma, `MilitaryResolution` y evento
-- [ ] T039 Ejecutar todos los comandos y comprobar todos los resultados esperados de `specs/001-resolver-ordenes-encadenadas/quickstart.md`; si un selector `-k` no recoge una prueba prevista, renombrar esa prueba en `tests/machiavelli/engine/test_military.py`, `tests/machiavelli/engine/test_core.py`, `tests/machiavelli/test_game.py` o `tests/machiavelli/test_discord.py` sin duplicarla
-- [ ] T040 Revisar `tests/machiavelli/engine/test_military.py` contra FR-001–FR-052 y SC-001–SC-008, eliminar únicamente pruebas obsoletas del flujo mutable y confirmar que cada requisito está cubierto una vez por la matriz más cercana; no añadir pruebas equivalentes con distinta preparación
-- [ ] T041 Ejecutar `python -m pytest -q` y `ruff check .`; corregir todos los fallos en `machiavelli/engine/military.py`, `machiavelli/engine/core.py`, `machiavelli/events.py`, `machiavelli/game.py`, `machiavelli/discord.py` y sus cinco archivos de prueba, sin debilitar asserts, ampliar alcance ni añadir dependencias
+- [ ] T038 Añadir `build_representative_game()`, `test_representative_resolution_determinism` y `test_representative_resolution_budget` en `tests/machiavelli/engine/test_military.py` con exactamente 30 unidades, 60 filas, 20 lugares de conflicto, convoy de 5 flotas y al menos dos desalojos; preparar un mapping inmutable y un gestor determinista que retire una unidad a destino válido y elimine otra con `None`; en la prueba funcional construir cinco `Game` frescos y afirmar igualdad exacta de firma, `MilitaryResolution`, evento y snapshot final sin límite temporal; en la prueba temporal, condicionada a `MACHIAVELLI_REFERENCE_PERF=1`, construir escenario/decisiones antes del cronómetro, medir solo `MilitaryResolver.run(gestor)` y exigir menos de 1 segundo por cada ejecución —no promedio—; incluir duración, máximo, `platform.python_version()`, `platform.platform()`, `platform.machine()` y `os.cpu_count()` en fallos; documentar la puerta en `.github/workflows/military-performance.yml` con Ubuntu 24.04, CPython 3.13, job dedicado, sin cobertura ni paralelismo
+- [ ] T039 Añadir `TestIntegratedMilitaryAcceptance` en `tests/machiavelli/engine/test_military.py` usando la factoría y `iter_military_orderings(...)`: construir una campaña compacta que combine movimientos relacionados, Support dependiente, Convert, convoy válido o roto, al menos una cancelación, una rebelión sometida o liberada, un asedio iniciado/levantado/completado, un lugar disputado y una unidad desalojada resuelta por un gestor determinista; ejecutar cada variante sobre un `Game` fresco, sin alterar el orden relativo de los Advance de un mismo actor, y comparar por igualdad `MilitaryResolution`, las seis listas del evento y `military_snapshot(game)`; afirmar un único resultado por unidad, una única aplicación final, retirada completada y ausencia de estados intermedios observables. Esta tarea constituye la puerta de aceptación completa de US1 y la cobertura integrada de SC-002 para cancelaciones, asedios, rebeliones, lugares disputados y retiradas
+- [ ] T040 Ejecutar todos los comandos y comprobar todos los resultados esperados de `specs/001-resolver-ordenes-encadenadas/quickstart.md`; si un selector `-k` no recoge una prueba prevista, renombrar esa prueba en `tests/machiavelli/engine/test_military.py`, `tests/machiavelli/engine/test_core.py`, `tests/machiavelli/test_game.py` o `tests/machiavelli/test_discord.py` sin duplicarla
+
+**Trazabilidad de aceptación de US1**:
+
+| Escenario | Cobertura |
+|-----------|-----------|
+| Una orden lógica por unidad y sustitución única | T005, T011, T039 |
+| Resultado idéntico bajo orden incidental diferente | T039 |
+| Snapshot inválido o ciclo irresoluble sin cambios | T003, T019 |
+
+- [ ] T041 Revisar `tests/machiavelli/engine/test_military.py`, `tests/machiavelli/test_game.py`, `tests/machiavelli/engine/test_core.py` y `tests/machiavelli/test_discord.py` contra FR-001–FR-053, NFR-001–NFR-007 y SC-001–SC-009; confirmar cobertura explícita de Convert ganador, perdedor, empatado y cancelado por autoconflicto, filas huérfanas, Support emitido por una unidad desalojada con efecto causal, rechazo pre-commit de conflictos pendientes, aceptación integrada de US1, invariancia de cancelaciones/asedios/rebeliones/lugares disputados/retiradas, estado observado por control, `CycleDiagnostic` reproducible, mensajes accionables y frontera `asyncio.to_thread`; revisar además que no exista `deepcopy(Game)` ni copia completa equivalente por iteración, que los estados usen `slots` y colecciones inmutables, que firmas/diagnósticos contengan valores primitivos, que solo se retengan firmas únicas necesarias y que SQLite/`Game` no crucen el worker; eliminar solo pruebas obsoletas del flujo mutable y confirmar cobertura única por la matriz más cercana, sin duplicar preparación
+- [ ] T042 Ejecutar `python -m pytest -q` y `ruff check .`; en el job de referencia ejecutar además `MACHIAVELLI_REFERENCE_PERF=1 python -m pytest -q tests/machiavelli/engine/test_military.py -k "representative_resolution_budget"`; corregir todos los fallos en `machiavelli/engine/military.py`, `machiavelli/engine/core.py`, `machiavelli/events.py`, `machiavelli/game.py`, `machiavelli/discord.py`, el workflow de rendimiento y sus cinco archivos de prueba, sin debilitar asserts, ampliar alcance ni añadir dependencias
 
 ---
 
@@ -323,8 +357,9 @@ Task T033: traducción segura del error en machiavelli/discord.py
 ### MVP First
 
 1. Completar Phase 1 y Phase 2.
-2. Completar US1 (T003–T011).
-3. Ejecutar su checkpoint y detenerse si solo se necesita atomicidad básica.
+2. Completar el núcleo técnico de US1 (T003–T011).
+3. Ejecutar su checkpoint y detenerse solo si se necesita una demostración interna de
+   atomicidad básica; no declarar aceptada US1 hasta completar US3, US5 y T039.
 
 ### Incremental Delivery
 
@@ -345,3 +380,5 @@ Task T033: traducción segura del error en machiavelli/discord.py
   su mapping, no elige destinos.
 - No se cambia el esquema, no se añade configuración y no se conserva compatibilidad
   con `conflicts_map`, que no era contrato público.
+- La aceptación completa de US1 ocurre en T039; los checkpoints anteriores validan
+  incrementos técnicos y no sustituyen sus tres escenarios de aceptación.

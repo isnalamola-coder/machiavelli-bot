@@ -27,6 +27,21 @@ encadenadas, conflictos, rebeliones, asedios y retiradas.
 - Q: ¿Qué ataque cancela un Support al romper una dependencia circular? → A:
   Cualquier Advance válido, activo y no cancelado contra quien apoya, directo o por
   convoy disponible, cuyo origen sea distinto del lugar apoyado.
+- Q: ¿Qué formato persistido usan Support y Transport? → A: Support usa
+  `<lugar>` o `<lugar> (<potencia>)`; Transport usa `A <origen>` y se enlaza al
+  ejército único que ocupaba ese origen en el snapshot.
+- Q: ¿Qué parte de Support pertenece al MVP de US1? → A: Compilación, geometría y
+  fuerza de Supports no dependientes; cortes, propagación y ciclos permanecen en
+  US3.
+- Q: ¿Qué ocurre con una guarnición independiente desalojada sin política externa?
+  → A: La resolución aborta y conserva el snapshot completo; solo un gestor que
+  devuelva una decisión explícita para ella permite aplicar el turno.
+- Q: ¿Dónde se bloquea la contratación en una ciudad rebelde? → A: En el flujo de
+  reclutamiento de mantenimiento ya existente, además de bloquear Convert en la
+  adjudicación militar.
+- Q: ¿Cuándo se registra el evento militar? → A: Se construye y valida antes del
+  commit y su registro auditable se incluye en la misma sustitución atómica que el
+  estado militar.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -180,12 +195,17 @@ de estación, y que la campaña no continúa hasta que termina.
 2. **Given** uno o varios conflictos durante la fase, **When** se prepara la retirada,
    **Then** cada espacio disputado efectivamente por dos o más facciones queda
    registrado como destino no válido; un cruce registra ambos extremos.
-3. **Given** una guarnición independiente desalojada, **When** todavía no existe una
-   regla aprobada para su retirada, **Then** se conserva como pendiente y no se
-   elimina silenciosamente ni se activa una resolución automática no especificada.
+3. **Given** una guarnición independiente desalojada, **When** el gestor no existe o
+   no devuelve una decisión explícita para ella, **Then** la resolución completa
+   aborta, conserva íntegramente el snapshot militar inicial y los eventos previos,
+   y no crea ninguna colección persistida o transitoria de pendientes.
 4. **Given** una adjudicación con desalojos y un gestor no disponible o fallido,
    **When** se intenta continuar la campaña, **Then** no se ejecutan hambre, control
    ni cambio de estación y no se consolida un estado militar incompleto.
+5. **Given** que el administrador ejecuta el turno desde Discord, **When** se cargan
+   la partida, el motor y el guardado, **Then** la operación síncrona completa se
+   ejecuta fuera del event loop; la conexión SQLite y el `Game` permanecen en ese
+   worker y solo regresan el reporte inmutable o una excepción tipada.
 
 ---
 
@@ -220,6 +240,10 @@ idéntica.
 - El destino final de un convoy de ejército nunca puede ser mar.
 - Una flota extranjera puede transportar un ejército si ambas declaraciones
   coinciden; una flota solo puede declarar un ejército transportado.
+- El `target` persistido de Transport es exactamente `A <origen>`; no incluye
+  potencia porque el snapshot admite un único ejército en ese origen. El `target`
+  de Support es `<lugar>` para la facción propia o `<lugar> (<potencia>)` para otra
+  facción, con un único espacio antes del paréntesis.
 - Una flota en la provincia final no convierte un movimiento terrestre normal en
   convoy ni cuenta como punto intermedio.
 - Los cruces solo se aplican a movimientos directos. Dos unidades del mismo jugador
@@ -290,7 +314,9 @@ idéntica.
   declarado y cada punto intermedio DEBE contener al inicio una flota con Transport
   dirigido al ejército correcto.
 - **FR-014**: Una flota Transport DEBE permanecer en su origen, conservar fuerza y
-  apoyos normales, poder ser atacada y transportar como máximo a un ejército.
+  apoyos normales, poder ser atacada y transportar como máximo a un ejército. Su
+  `target` DEBE tener el formato exacto `A <origen>` y enlazarse a la identidad única
+  del ejército que ocupaba ese origen en el snapshot.
 - **FR-015**: Un ejército PUEDE depender de varias flotas, incluidas flotas de otras
   facciones, siempre que la ruta y cada Transport coincidan en ambos sentidos.
 - **FR-016**: La repetición de localizaciones o de una misma transportadora NO DEBE
@@ -338,7 +364,10 @@ idéntica.
 - **FR-030**: La fuerza de cada participante DEBE incluir su fuerza base, los apoyos
   activos dirigidos a su facción y lugar, y el modificador de rebelión aplicable.
 - **FR-031**: Cada apoyo DEBE conservarse como relación individual con facción y
-  lugar de destino; si omite facción, se aplica a la facción de quien apoya.
+  lugar de destino. Su `target` DEBE ser `<lugar>` para la facción de quien apoya o
+  `<lugar> (<potencia>)` para una facción explícita; cualquier cantidad distinta de
+  componentes, paréntesis incompletos o potencia inexistente produce Hold inválido
+  solo para la unidad emisora.
 - **FR-032**: Una guarnición PUEDE apoyar su provincia incluso bajo asedio.
 - **FR-033**: El apoyo de una unidad desalojada DEBE cancelarse. Un ataque empatado
   contra quien apoya DEBE cortar el apoyo salvo que estuviera dirigido al origen del
@@ -356,7 +385,9 @@ idéntica.
   convoyes disponibles, movimientos y conversiones exitosos, desalojos,
   autoconflictos cancelados y posiciones efectivas. Si, después del desempate
   completo, reaparece un estado sin progreso determinista, el sistema DEBE abortar,
-  conservar el estado militar inicial y registrar información reproducible.
+  conservar el estado militar inicial y producir un `CycleDiagnostic` inmutable con
+  la etapa agotada, las iteraciones de primera aparición y repetición, los conflictos
+  pendientes ordenados y la firma primitiva canónica del estado repetido.
 
 #### Rebeliones y asedios
 
@@ -372,9 +403,11 @@ idéntica.
   libere.
 - **FR-041**: Una orden cancelada, aunque deje físicamente la unidad en la provincia,
   NO DEBE contar como Hold exitoso para someter una rebelión.
-- **FR-042**: Una rebelión de ciudad DEBE cerrar la ciudad a conversiones y
-  contratación de guarniciones, y solo DEBE ser sometida por un asedio completo del
-  controlador o terminada por el gasto de pacificación aplicable.
+- **FR-042**: Una rebelión de ciudad DEBE cerrar la ciudad a conversiones durante la
+  campaña y a contratación de guarniciones durante el mantenimiento existente. En
+  ambos casos la orden es inválida y no modifica unidades ni ducados. La rebelión
+  solo DEBE ser sometida por un asedio completo del controlador o terminada por el
+  gasto de pacificación aplicable.
 - **FR-043**: Una unidad en una provincia PUEDE asediar una guarnición o rebelión de
   ciudad situada en esa misma provincia; una flota solo PUEDE hacerlo si la ciudad
   tiene puerto.
@@ -398,12 +431,15 @@ idéntica.
   ocupaciones finales duplicadas, ejércitos en mar, convoyes parciales, costas
   inválidas, unidades sin resultado ni conflictos pendientes.
 - **FR-050**: La aplicación DEBE construir y validar el estado militar, asedios,
-  rebeliones afectadas, unidades desalojadas y lugares de conflicto completos antes
-  de sustituir el estado del juego una sola vez; el cálculo posterior de control
-  DEBE recibir exclusivamente ese estado definitivo.
+  rebeliones afectadas, unidades desalojadas, lugares de conflicto y registro del
+  evento completos antes de sustituir el estado del juego una sola vez; el cálculo
+  posterior de control DEBE recibir exclusivamente ese estado definitivo. Un fallo
+  al construir o serializar el evento conserva también el estado inicial.
 - **FR-051**: Toda unidad desalojada DEBE conservarse para la fase de retiradas y no
-  ocupar su localización perdida; una guarnición independiente no DEBE desaparecer
-  mientras su política de retirada siga pendiente.
+  ocupar su localización perdida. Si una guarnición independiente queda desalojada,
+  el gestor DEBE devolver una decisión explícita para ella; mientras no exista ese
+  gestor o falte esa entrada, la resolución completa aborta y el snapshot anterior
+  permanece sin cambios, sin crear una colección persistida de pendientes.
 - **FR-052**: La fase de retiradas DEBE recibir explícitamente las unidades
   desalojadas y los lugares de conflicto inmediatamente después de la adjudicación.
   La campaña NO DEBE continuar hacia hambre, control o cambio de estación hasta que
@@ -415,28 +451,47 @@ idéntica.
 ### Quality, UX & Performance Requirements *(mandatory)*
 
 - **NFR-001**: Esta feature no añade una interacción Discord nueva. El éxito mantiene
-  la confirmación de campaña existente; un fallo global DEBE mostrarse en español de
-  España como: “No se pudo resolver la fase militar; no se aplicó ningún cambio.”,
-  sin exponer detalles internos y de forma efímera cuando la interacción sea privada
-  o fallida.
+  la confirmación de campaña existente. Todo fallo militar visible DEBE responder de
+  forma efímera, en español de España, comenzar con “No se pudo resolver la fase
+  militar; no se aplicó ningún cambio.” y añadir una acción correctiva segura según
+  la categoría: revisar ocupaciones incompatibles, revisar las órdenes y escalar si
+  se reproduce, activar la gestión de retiradas, o reintentar y comunicar el fallo si
+  persiste. El mensaje NO DEBE exponer clases, trazas, rutas, líneas ni diagnósticos
+  internos.
 - **NFR-002**: Cada regla modificada DEBE disponer de una prueba de aceptación o
   regresión sobre resultados públicos. La validación previa a integración DEBE
   incluir toda la suite del dominio y sus comprobaciones de calidad sin debilitar
   pruebas existentes.
 - **NFR-003**: La carga representativa será una campaña con 30 unidades, 60 filas de
-  orden, 20 lugares de conflicto y un convoy de 5 transportadoras. Su adjudicación
-  completa DEBE terminar en menos de 1 segundo en el entorno de referencia del
-  proyecto y usar memoria acotada por el número de unidades, órdenes y estados de
-  resolución observados.
+  orden, 20 lugares de conflicto, un convoy de 5 transportadoras y al menos dos
+  unidades desalojadas: una retirada a un destino válido y otra eliminada mediante
+  una decisión `None`. La prueba funcional DEBE verificar en cualquier entorno la
+  igualdad exacta de resolución, evento y snapshot final en cinco juegos frescos. La
+  puerta temporal DEBE medir exclusivamente
+  `MilitaryResolver.run()` con el gestor determinista incluido y exigir menos de 1
+  segundo por ejecución —no por promedio— en el job de referencia dedicado con
+  Ubuntu 24.04, CPython 3.13, sin cobertura ni paralelismo. El escenario y las
+  decisiones se construyen antes del cronómetro.
 - **NFR-004**: No hay cambio de datos persistidos ni migración. Las operaciones de
   carga y guardado DEBEN conservar el orden declarado y, ante error, mantener el
   estado previo íntegro.
 - **NFR-005**: Todo resultado y diagnóstico de ciclo DEBE ser reproducible con las
   mismas entradas, independientemente del orden incidental de jugadores,
-  colecciones o cargas sucesivas.
-- **NFR-006**: Los cambios de resultado de turno DEBEN dejar un evento auditable que
-  permita reconstruir movimientos, cancelaciones, convoyes rotos, desalojos,
-  rebeliones y asedios sin registrar secretos ni datos personales innecesarios.
+  colecciones o cargas sucesivas. El diagnóstico DEBE compararse como datos
+  estructurados y contener únicamente enteros, cadenas, booleanos, `None` y tuplas
+  primitivas ordenadas; no puede depender de `repr`, `hash()`, identidad de objetos,
+  diccionarios o sets sin normalizar.
+- **NFR-006**: Los cambios de resultado de turno DEBEN dejar, mediante el mecanismo
+  persistente de eventos ya existente, un registro auditable que permita reconstruir
+  movimientos, cancelaciones, convoyes rotos, desalojos, rebeliones y asedios tras un
+  ciclo guardar-cargar, sin registrar secretos ni datos personales innecesarios.
+- **NFR-007**: La operación síncrona completa iniciada por `run_game` —abrir SQLite,
+  cargar `Game`, ejecutar `GameEngine`, construir el reporte y guardar— DEBE
+  ejecutarse fuera del event loop de Discord mediante una única llamada a
+  `asyncio.to_thread()`. La conexión y los objetos mutables permanecen en el worker;
+  solo puede retornar `tuple[str, ...]` o propagar una excepción tipada. El worker
+  NO DEBE
+  invocar APIs de Discord.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -460,6 +515,9 @@ idéntica.
   o levantamiento.
 - **Paquete de retiradas**: Unidades desalojadas y conjunto de lugares disputados que
   la fase posterior necesita para validar destinos.
+- **Diagnóstico de ciclo**: Registro inmutable y reproducible de una dependencia
+  irresoluble, con etapa agotada, iteraciones, conflictos pendientes ordenados y
+  firma canónica del estado; solo se registra internamente.
 
 ## Success Criteria *(mandatory)*
 
@@ -471,26 +529,30 @@ idéntica.
 - **SC-002**: El 100 % de las permutaciones probadas del orden de jugadores y
   colecciones produce idénticos resultados, cancelaciones, asedios, rebeliones,
   lugares disputados y retiradas.
-- **SC-003**: El 100 % de los fallos de estado, ciclos irresolubles y excepciones
-  probados conserva sin cambios todas las colecciones militares iniciales.
+- **SC-003**: El 100 % de los fallos de estado, ciclos irresolubles, gestor de
+  desalojos y construcción o serialización del evento probados conserva sin cambios
+  todas las colecciones militares iniciales y el registro de eventos previo.
 - **SC-004**: El 100 % de las unidades desalojadas en la matriz de aceptación aparece
   una sola vez en el paquete entregado inmediatamente al gestor y el 100 % de los
   espacios disputados por dos o más facciones —incluidos ambos extremos de un
   cruce— se rechaza como destino de retirada antes de continuar la campaña.
 - **SC-005**: Todos los casos de cancelación demuestran que una orden cancelada no
   produce efectos de Hold, Support, Transport, Besiege, Lift siege ni Convert.
-- **SC-006**: La carga representativa definida se resuelve completamente en menos de
-  1 segundo en el entorno de referencia, incluyendo detección de dependencias y
-  construcción de retiradas.
+- **SC-006**: En el job de referencia definido, cada una de cinco ejecuciones de la
+  carga representativa termina en menos de 1 segundo e incluye detección de
+  dependencias, dos desalojos, invocación y validación del gestor, una retirada, una
+  eliminación, evento y aplicación final. En cualquier otro entorno, la misma carga
+  supera la prueba funcional de determinismo sin usar el tiempo como puerta.
 - **SC-007**: El 100 % de los mensajes de error visibles introducidos o modificados
-  está en español de España, confirma que no hubo cambios parciales y no expone
-  detalles internos.
+  está en español de España, confirma que no hubo cambios parciales, proporciona una
+  acción correctiva adecuada a la categoría y no expone detalles internos.
 - **SC-008**: La suite de aceptación cubre los siete códigos de orden, movimientos
   directos, cruces, convoyes, apoyos, autoconflictos, conversiones, rebeliones,
   asedios, ciclos, aplicación atómica y retiradas sin resultados no deterministas.
-- **SC-009**: En una revisión guiada de aceptación, al menos el 90 % de los
-  participantes identifica al primer intento si la campaña se aplicó o se rechazó y
-  si el estado anterior quedó intacto a partir del mensaje recibido.
+- **SC-009**: Las pruebas del límite Discord demuestran que `run_game` delega una sola
+  operación síncrona completa fuera del event loop, que SQLite y `Game` no cruzan la
+  frontera y que el éxito retorna un reporte inmutable mientras las excepciones
+  tipadas conservan su categoría.
 
 ## Assumptions
 
@@ -503,8 +565,8 @@ idéntica.
 - Una unidad cuya orden se cancela conserva presencia física y defensa normal en su
   posición efectiva, pero no ejecuta ningún efecto propio de la orden cancelada.
 - La política definitiva de retirada de guarniciones independientes queda fuera de
-  esta feature; hasta aprobarla, deben conservarse como pendientes y no resolverse o
-  eliminarse automáticamente.
+  esta feature. Hasta aprobarla, cualquier desalojo de una guarnición independiente
+  sin decisión explícita del gestor aborta el turno y conserva el snapshot completo.
 - Las retiradas se resuelven inmediatamente dentro de la misma campaña, antes de
   hambre, control y cambio de estación. Esta feature entrega unidades y lugares de
   conflicto y coordina la pausa; la implementación del gestor de desalojos es una
@@ -517,3 +579,6 @@ idéntica.
 - No forman parte de esta feature un motor genérico de reglas, nuevas dependencias,
   ejecución parcial de convoyes, la implementación del gestor de desalojos ni
   cambios en el modelo persistido de órdenes.
+- La evaluación cualitativa de comprensión por participantes se considera una
+  validación de producto posterior y no una puerta automatizable de integración; la
+  aceptación de esta feature se rige por SC-001–SC-009.
