@@ -443,7 +443,7 @@ async def run_game(interaction: discord.Interaction):
 )
 async def game_status(interaction: discord.Interaction):
     # Deferimos porque leer la base de datos y procesar el estado puede tomar un instante
-    await interaction.response.defer(ephemeral=False)
+    await interaction.response.defer(ephemeral=True)
 
     try:
         with sqlite3.connect(game_group.db_path) as conn:
@@ -462,7 +462,7 @@ async def game_status(interaction: discord.Interaction):
             )
 
         # Enviamos el reporte maquetado al canal
-        await interaction.followup.send(mensaje_status)
+        await interaction.followup.send(mensaje_status, ephemeral=True)
 
     except GameNotFoundException:
         await interaction.followup.send(

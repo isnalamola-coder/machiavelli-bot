@@ -41,95 +41,109 @@ La versión actual de desarrollo es la 0.5.0. La versión actual de producción 
 
 ## Comandos disponibles
 
-### `!sync` (Juez)
+### `!sync` (admin)
 
 *Versión 0.0.1*
+
 Sincroniza los comandos disponibles. Ejecutar cuando se deban registrar nuevos comandos de slash.
 
 ### `/mach` (todos)
 
 *Versión 0.2.0*
-Conjunto de comandos para su uso por los jugadores. En este momento hay dos.
-En la versión `0.1.x` el comando era `/sharcashvelli`.
+
+Conjunto de comandos para su uso por los jugadores. Todos estos comandos son privados, es decir, la respuesta
+a los comandos es un mensaje privado solo visible por el jugador que los ejecuta.
 
 #### `/mach game_status`
 
 *Versión 0.2.0*
-Muestra el estado de la partida.
+
+Muestra el estado de la partida y los jugadores que han enviado sus órdenes hasta ese momento.
 
 #### `/mach game_report`
 
 *Versión 0.2.0*
+
 Muestra el último informe de la partida.
 
 #### `/mach cmdlist`
 
 *Versión 0.2.0*
+
 Muestra las órdenes enviadas hasta el momento por el jugador.
 
 #### `/mach cmd`
 
 *Versión 0.2.0*
+
 Añade una orden nueva al turno actual.
 
 #### `/mach expense`
 
 *Versión 0.4.0*
+
 Añade un gasto nuevo al turno actual.
 
-### `/shar` (Juez)
+### `/shar` (administrador)
 
 *Versión 0.2.0*
-Conjunto de comandos para su uso por el administrador. En este momento hay seis.
-En la versión `0.1.x` el comando era `/sharcashvelli_admin`.
+
+Conjunto de comandos para su uso por el administrador. Todos estos comandos son públicos, a excepción de los dos
+utilizados para introducir órdenes y gastos para un jugador.
 
 #### `/shar create`
 
 *Versión 0.2.0*
+
 Crea una partida en el canal en que se ejecuta.
 
 #### `/shar set_scenario`
 
 *Versión 0.2.0*
+
 Selecciona un escenario para la partida.
 
 #### `/shar set_deadlines`
 
 *Versión 0.2.0*
+
 Fija las fechas de ejecuciones de turnos de la partida.
 
 #### `/shar add_player`
 
 *Versión 0.2.0*
+
 Añade un jugador a la partida.
 
 #### `/shar run_game`
 
 *Versión 0.2.0*
+
 Ejecuta las órdenes de la partida y genera el informe para el siguiente turno.
 
 #### `/shar cmd_user`
 
 *Versión 0.3.0*
-Introduce las órdenes para un jugador determinado.
+
+Introduce las órdenes para un jugador determinado, cuando este jugador ha hecho llegar las órdenes de forma
+distinta al uso de `/mach cmd`, por ejemplo enviando la plantilla rellena.
 
 #### `/shar expense_user`
 
 *Versión 0.4.0*
-Introduce gastos para un jugador determinado.
+
+Introduce gastos para un jugador determinado, cuando este jugador ha hecho llegar los gastos de forma
+distinta al uso de `/mach expense`, por ejemplo enviando la plantilla rellena.
 
 ## Futuras versiones
 
 Se prevén las siguientes versiones
 
-### Versión 0.5.0
+### Versión 0.6.0
 
-- [X] Implementación de la ejecución de turnos de campaña.
-  - [X] Nuevo módulo events para almacenar los eventos de un turno, sin que el resto de módulos necesite formatearlos.
-  - [X] Nuevo package machiavelli.engine con clase GameEngine y relacionadas, responsable de la lógica de la partida.
-- [X] Desarrollar un juego de tests más exhaustivo para evitar errores incontrolados en la ejecución de los turnos.
-  - [X] Tests para el package machiavelli.engine
-- [X] Incorporación de un sistema de logging. Funcional, pero su uso irá extendiéndose a lo largo de las versiones.
+- [ ] Ampliación de GameEngine para soportar las operaciones que los jugadores vayan incorporando a sus órdenes.
+  - [ ] Transporte de tropas.
+- [ ] Creación de un Gestor de Eventos que muestre lo sucedido en el turno correctamente en el reporte.
 
 ### Desarrollos futuros
 
@@ -137,11 +151,18 @@ Cambios que afectan a los comandos del bot. Los cambios se irán incorporando a 
 
 - [ ] Ejecutar todas las acciones del turno. Todavía faltan:
   - [ ] Asesinatos.
-  - [ ] Bajas por Hambre.
-  - [ ] Comandos militares.
+  - [ ] Órdenes militares.
+    - [ ] Transporte de tropas.
+    - [ ] Apoyo.
+    - [ ] Asedios y levantamiento de asedios.
+    - [ ] Efectos de las rebeliones en los combates.
   - [ ] Resolución de conflictos.
   - [ ] Tratamiento del fin de partida.
-- [ ] Hacer que el reporte incluya un mapa gráfico con la posición de las unidades en él
+  - [ ] Tratamiento de eliminación de jugadores.
+- [ ] Desarrollar el Gestor de Mensajes.
+- [ ] Refactorizar el interfaz con Discord para vaciarlo de lógica de juego.
+- [ ] Incluir algún tipo de chequeo del turno para advertir de órdenes incorrectas, ilegales o inconsistentes.
+- [ ] Hacer que el reporte incluya un mapa gráfico con la posición de las unidades en él.
 
 ## Histórico de versiones
 
@@ -168,4 +189,16 @@ Cambios que afectan a los comandos del bot. Los cambios se irán incorporando a 
   separan del envío de órdenes a las tropas.
 - Versión 0.4.1: Corrección de algunos bugs importantes.
 - Versión 0.4.2: Corrección de un bug en el envío de órdenes de conversión.
+- Versión 0.5.0: Primera versión con implementación de las fases de campaña. Incluye gestión completa de desastres
+  (hambre y plagas), gestión de todos los gastos EXCEPTO el asesinato, pero sí todos los SOBORNOS. De las órdenes
+  militares solo resuelve el AVANCE, la CONVERSIÓN y MANTENER, y NO gestiona conflictos.
+  
+  La generación de eventos se ha modificado, y los eventos ya no se generan ya formateados, sino de forma abstracta
+  (tipo de evento y los datos asociados), pero todavía es necesario implementar un gestor de eventos que los muestre
+  en el reporte correctamente (actualmente, solo muestra el tipo de evento).
+
+  La gestión de la lógica del juego se ha trasladado a un nuevo componente, GameEngine, que actúa de orquestador entre
+  distintos componentes (gestores de Desastres, de Control, de Gastos, de Rebeliones, de Sobornos, Militares, etc) y
+  que está prácticamente terminado, pero le quedan las partes más complejas (TRANSPORTE y, sobre todo, CONFLICTOS).
+- Versión 0.5.1: `/mach game_status` devuelve ahora un mensaje privado.
   
