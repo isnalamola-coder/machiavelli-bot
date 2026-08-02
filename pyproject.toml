@@ -1,0 +1,22 @@
+[project]
+name = "machiavelli"
+version = "0.4.2"
+description = "Motor del juego Machiavelli"
+requires-python = ">=3.13"
+
+[tool.ruff]
+# Longitud máxima de línea (por defecto 88, igual que Black)
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+# Selección de reglas a aplicar:
+# E/W = pycodestyle, F = Pyflakes, I = isort (reordenar imports),
+# UP = pyupgrade (sintaxis moderna), B = flake8-bugbear (errores comunes)
+select = ["E", "W", "F", "I", "UP", "B"]
+
+# Reglas específicas a ignorar si alguna te molesta
+ignore = []
+
+# Permitir autofix para todas las reglas activas
+fixable = ["ALL"]

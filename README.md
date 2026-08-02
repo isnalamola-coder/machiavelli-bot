@@ -1,0 +1,171 @@
+# Machiavelli Bot
+
+Este es un bot de Discord desarrollado para automatizar partidas de Machiavelli. Este bot permite (permitirá) a un
+administrador (rol de Juez) crear partidas, seleccionar escenario y condiciones de victoria, añadir jugadores, repartir
+facciones entre esos jugadores, fijar deadlines para la entrega de órdenes, y ejecutar esas órdenes de forma automática
+o manual.
+
+Además permitirá a los jugadores recibir el estado actual de la partida, enviar sus órdenes para el turno actual, y
+realizar intercambios de recursos con el resto de jugadores.
+
+## El bot de Discord
+
+Tenemos dos versiones del bot registrada: sharcashvelli para la versión ya en marcha, y sharcashvelli-bot con la versión
+de desarrollo.
+
+Los dos bots necesitan los siguientes permisos:
+
+- View Channel
+- Send Messages
+- Manage Messages
+- Read Message History
+- Use Application Commands
+
+Estos son los que tendré que utilizar para obtener el token del bot.
+
+En el aparaado de Bot, Privileged Gateway Intents, deben marcarse:
+
+- Server Members Intent
+- Message Content Intent
+
+Los parámetros que necesita el bot los fijamos en un fichero .env. Se puede tomar .env.example como punto de partida:
+
+```env
+DISCORD_TOKEN=tu_token_aqui
+DATABASE_PATH=game.db
+```
+
+## Versión
+
+La versión actual de desarrollo es la 0.5.0. La versión actual de producción es la 0.4.2.
+
+## Comandos disponibles
+
+### `!sync` (Juez)
+
+*Versión 0.0.1*
+Sincroniza los comandos disponibles. Ejecutar cuando se deban registrar nuevos comandos de slash.
+
+### `/mach` (todos)
+
+*Versión 0.2.0*
+Conjunto de comandos para su uso por los jugadores. En este momento hay dos.
+En la versión `0.1.x` el comando era `/sharcashvelli`.
+
+#### `/mach game_status`
+
+*Versión 0.2.0*
+Muestra el estado de la partida.
+
+#### `/mach game_report`
+
+*Versión 0.2.0*
+Muestra el último informe de la partida.
+
+#### `/mach cmdlist`
+
+*Versión 0.2.0*
+Muestra las órdenes enviadas hasta el momento por el jugador.
+
+#### `/mach cmd`
+
+*Versión 0.2.0*
+Añade una orden nueva al turno actual.
+
+#### `/mach expense`
+
+*Versión 0.4.0*
+Añade un gasto nuevo al turno actual.
+
+### `/shar` (Juez)
+
+*Versión 0.2.0*
+Conjunto de comandos para su uso por el administrador. En este momento hay seis.
+En la versión `0.1.x` el comando era `/sharcashvelli_admin`.
+
+#### `/shar create`
+
+*Versión 0.2.0*
+Crea una partida en el canal en que se ejecuta.
+
+#### `/shar set_scenario`
+
+*Versión 0.2.0*
+Selecciona un escenario para la partida.
+
+#### `/shar set_deadlines`
+
+*Versión 0.2.0*
+Fija las fechas de ejecuciones de turnos de la partida.
+
+#### `/shar add_player`
+
+*Versión 0.2.0*
+Añade un jugador a la partida.
+
+#### `/shar run_game`
+
+*Versión 0.2.0*
+Ejecuta las órdenes de la partida y genera el informe para el siguiente turno.
+
+#### `/shar cmd_user`
+
+*Versión 0.3.0*
+Introduce las órdenes para un jugador determinado.
+
+#### `/shar expense_user`
+
+*Versión 0.4.0*
+Introduce gastos para un jugador determinado.
+
+## Futuras versiones
+
+Se prevén las siguientes versiones
+
+### Versión 0.5.0
+
+- [X] Implementación de la ejecución de turnos de campaña.
+  - [X] Nuevo módulo events para almacenar los eventos de un turno, sin que el resto de módulos necesite formatearlos.
+  - [X] Nuevo package machiavelli.engine con clase GameEngine y relacionadas, responsable de la lógica de la partida.
+- [X] Desarrollar un juego de tests más exhaustivo para evitar errores incontrolados en la ejecución de los turnos.
+  - [X] Tests para el package machiavelli.engine
+- [X] Incorporación de un sistema de logging. Funcional, pero su uso irá extendiéndose a lo largo de las versiones.
+
+### Desarrollos futuros
+
+Cambios que afectan a los comandos del bot. Los cambios se irán incorporando a las versiones conforme se completen.
+
+- [ ] Ejecutar todas las acciones del turno. Todavía faltan:
+  - [ ] Asesinatos.
+  - [ ] Bajas por Hambre.
+  - [ ] Comandos militares.
+  - [ ] Resolución de conflictos.
+  - [ ] Tratamiento del fin de partida.
+- [ ] Hacer que el reporte incluya un mapa gráfico con la posición de las unidades en él
+
+## Histórico de versiones
+
+- Versión 0.0.1:
+  Primera versión, incluye comandos para enviar las órdenes como fichero adjunto, para ver quién los ha mandado y para
+  descargarlos. Este primer bot no tiene ninguna lógica relacionada con el juego, solo es un "almacenador" de mensajes.
+- Versión 0.1.0: Primer bot que tiene la lógica del juego. Incorpora sus tablas; las potencias, los jugadores, la
+  información de la situación del tablero y la ejecución y reporte del primerísimo turno, el inicio de Primavera
+  (Hambre e Ingresos).
+
+  Estos comandos (bajo el grupo `/sharcashvelli` y `/sharcashvelli_admin`) conviven con los de la *versión 0.0.1* ya
+  que no tienen forma de permitir el envío de órdenes de juego, que todavía deben enviarse con `!send`.
+- Versión 0.1.1: Se añade información sobre los asedios.
+- Versión 0.2.1: Se renombran los grupos `/sharcashvelli` y `/sharcashvelli_admin` a `/mach` y `/shar` respectivamente;
+  se añaden dos nuevos comandos `/mach cmd` y `/mach cmdlist`; el comando `/mach game_report` ahora envía un mensaje
+  privado.
+- Versión 0.3.0: Se ejecutan las órdenes del turno (fase de mantenimiento solo). nuevo comando `/shar cmd_user` para
+  introducir en el bot las órdenes de un jugador que las haya mandado usando `/send`. Se ha mejorado el formato de
+  `/mach game_report` y de `/mach game_status`.
+- Versión 0.3.1: Corrección de algunos bugs.
+- Versión 0.4.0: Se eliminan definitivamente los comandos `/send`, `/list`, `/view`, `/dice`, `/file` y `/clean`.
+  Se expanden `/mach cmd`, `/mach cmdlist` y `/shar cmd_user` para tratar las órdenes de una campaña, y se añaden
+  los nuevos comandos `/mach expense` y `/shar expense_user` para enviar los gastos para el turno actual, que se
+  separan del envío de órdenes a las tropas.
+- Versión 0.4.1: Corrección de algunos bugs importantes.
+- Versión 0.4.2: Corrección de un bug en el envío de órdenes de conversión.
+  
