@@ -889,7 +889,7 @@ async def cmd_user(
     command: str,
     target: str = None,
 ):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=False)
 
     try:
         with sqlite3.connect(admin_group.db_path) as conn:
@@ -900,7 +900,7 @@ async def cmd_user(
             if not player:
                 await interaction.followup.send(
                     f"**Error:** No se encontró a la potencia `{power}` en esta partida.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
@@ -908,7 +908,7 @@ async def cmd_user(
             if actor not in valid_actor:
                 await interaction.followup.send(
                     f"**Error:** `{actor}` no es un actor válido.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
@@ -916,7 +916,7 @@ async def cmd_user(
             if command not in valid_command:
                 await interaction.followup.send(
                     f"**Error:** `{command}` no es una orden válida.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
@@ -926,7 +926,7 @@ async def cmd_user(
             if valid_target and valid_target[0] != "" and target not in valid_target:
                 await interaction.followup.send(
                     f"**Error:** `{target}` no es un objetivo válido.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
@@ -937,16 +937,16 @@ async def cmd_user(
 
         report = "\n".join(lines)
 
-        await interaction.followup.send(f"{report}", ephemeral=True)
+        await interaction.followup.send(f"{report}", ephemeral=False)
 
     except GameNotFoundException:
         await interaction.followup.send(
-            "**Error:** No hay ninguna partida activa en este canal.", ephemeral=True
+            "**Error:** No hay ninguna partida activa en este canal.", ephemeral=False
         )
     except Exception as e:
         error_detallado = format_error_with_location(e)
         await interaction.followup.send(
-            f"**Error inesperado:** {error_detallado}", ephemeral=True
+            f"**Error inesperado:** {error_detallado}", ephemeral=False
         )
 
 
@@ -1066,7 +1066,7 @@ async def expense_user(
             if not player:
                 await interaction.followup.send(
                     f"**Error:** No se encontró a la potencia `{power}` en esta partida.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
@@ -1074,7 +1074,7 @@ async def expense_user(
             if expense not in valid_expense:
                 await interaction.followup.send(
                     f"**Error:** `{expense}` no es un gasto válido.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
@@ -1082,7 +1082,7 @@ async def expense_user(
             if target not in valid_target:
                 await interaction.followup.send(
                     f"**Error:** `{target}` no es un objetivo válido.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
@@ -1092,7 +1092,7 @@ async def expense_user(
             if amount not in valid_amount:
                 await interaction.followup.send(
                     f"**Error:** `{amount}` no es una cantidad válida.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
@@ -1103,11 +1103,11 @@ async def expense_user(
 
         report = "\n".join(lines)
 
-        await interaction.followup.send(report, ephemeral=True)
+        await interaction.followup.send(report, ephemeral=False)
 
     except GameNotFoundException:
         await interaction.followup.send(
-            "**Error:** No hay ninguna partida activa en este canal.", ephemeral=True
+            "**Error:** No hay ninguna partida activa en este canal.", ephemeral=False
         )
     except TooManyExpenses:
         report = [f"Orden `{cmd}` enviada."]
@@ -1115,9 +1115,9 @@ async def expense_user(
         report.append("**Órdenes recibidas hasta ahora:**")
         for c in player.commands:
             report.append(f"`{c}`")
-        await interaction.followup.send("\n".join(report), ephemeral=True)
+        await interaction.followup.send("\n".join(report), ephemeral=False)
     except Exception as e:
         error_detallado = format_error_with_location(e)
         await interaction.followup.send(
-            f"**Error inesperado:** {error_detallado}", ephemeral=True
+            f"**Error inesperado:** {error_detallado}", ephemeral=False
         )

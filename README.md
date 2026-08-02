@@ -88,8 +88,7 @@ Añade un gasto nuevo al turno actual.
 
 *Versión 0.2.0*
 
-Conjunto de comandos para su uso por el administrador. Todos estos comandos son públicos, a excepción de los dos
-utilizados para introducir órdenes y gastos para un jugador.
+Conjunto de comandos para su uso por el administrador. Todos estos comandos son públicos.
 
 #### `/shar create`
 
