@@ -1,0 +1,42 @@
+name: Military performance
+
+on:
+  pull_request:
+    paths:
+      - "machiavelli/**"
+      - "tests/machiavelli/**"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - ".github/workflows/military-performance.yml"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  reference-performance:
+    name: Ubuntu 24.04 / CPython 3.13
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      MACHIAVELLI_REFERENCE_PERF: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up CPython 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run military performance gate
+        run: >-
+          python -m pytest -q tests/machiavelli/engine/test_military.py
+          -k "representative_resolution_budget"
