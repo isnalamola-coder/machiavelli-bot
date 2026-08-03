@@ -43,93 +43,93 @@ La versión actual de desarrollo es la 0.5.0. La versión actual de producción 
 
 ### `!sync` (admin)
 
-*Versión 0.0.1*
+> Versión 0.0.1
 
 Sincroniza los comandos disponibles. Ejecutar cuando se deban registrar nuevos comandos de slash.
 
 ### `/mach` (todos)
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Conjunto de comandos para su uso por los jugadores. Todos estos comandos son privados, es decir, la respuesta
 a los comandos es un mensaje privado solo visible por el jugador que los ejecuta.
 
 #### `/mach game_status`
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Muestra el estado de la partida y los jugadores que han enviado sus órdenes hasta ese momento.
 
 #### `/mach game_report`
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Muestra el último informe de la partida.
 
 #### `/mach cmdlist`
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Muestra las órdenes enviadas hasta el momento por el jugador.
 
 #### `/mach cmd`
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Añade una orden nueva al turno actual.
 
 #### `/mach expense`
 
-*Versión 0.4.0*
+> Versión 0.4.0
 
 Añade un gasto nuevo al turno actual.
 
 ### `/shar` (administrador)
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Conjunto de comandos para su uso por el administrador. Todos estos comandos son públicos.
 
 #### `/shar create`
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Crea una partida en el canal en que se ejecuta.
 
 #### `/shar set_scenario`
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Selecciona un escenario para la partida.
 
 #### `/shar set_deadlines`
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Fija las fechas de ejecuciones de turnos de la partida.
 
 #### `/shar add_player`
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Añade un jugador a la partida.
 
 #### `/shar run_game`
 
-*Versión 0.2.0*
+> Versión 0.2.0
 
 Ejecuta las órdenes de la partida y genera el informe para el siguiente turno.
 
 #### `/shar cmd_user`
 
-*Versión 0.3.0*
+> Versión 0.3.0
 
 Introduce las órdenes para un jugador determinado, cuando este jugador ha hecho llegar las órdenes de forma
 distinta al uso de `/mach cmd`, por ejemplo enviando la plantilla rellena.
 
 #### `/shar expense_user`
 
-*Versión 0.4.0*
+> Versión 0.4.0
 
 Introduce gastos para un jugador determinado, cuando este jugador ha hecho llegar los gastos de forma
 distinta al uso de `/mach expense`, por ejemplo enviando la plantilla rellena.
@@ -141,8 +141,34 @@ Se prevén las siguientes versiones
 ### Versión 0.6.0
 
 - [ ] Ampliación de GameEngine para soportar las operaciones que los jugadores vayan incorporando a sus órdenes.
-  - [ ] Transporte de tropas.
-- [ ] Creación de un Gestor de Eventos que muestre lo sucedido en el turno correctamente en el reporte.
+  - [ ] SetupManager, para el setup inicial de la partida (antes en Game)
+- [ ] Reescritura y refactorización de prácticamente todo el código.
+  - [X] Creación del package db, para la gestión de la base de datos.
+  - [ ] Creación del package repositories, encargado de la persistencia de los elementos del juego.
+    - [X] CommandRepository
+    - [X] PlayerRepository
+    - [ ] GameRepository
+  - [ ] Creación del package services, para servicios varios.
+    - [X] Clases de autocompletar comandos de Discord.
+    - [ ] DiscordManager.
+    - [ ] Clases para generar el reporte de los distintos objetos.
+      - [X] CommandReporter
+      - [X] PlayerReporter
+      - [ ] GameReporter
+  - [ ] Creación del package game, responsable de las clases de dominio del juego.
+    - [X] GameTables
+    - [X] Map
+    - [X] Scenario
+    - [X] Command
+    - [X] Player
+    - [ ] Game
+    - [ ] Events
+  - [ ] Ampliación de GameEngine para soportar las operaciones que los jugadores vayan incorporando a sus órdenes.
+    - [ ] SetupManager, para el setup inicial de la partida (antes en Game)
+    - [ ] MaintenanceManager, para los turnos de mantenimiento (antes en Game)
+    - [ ] MilitaryResolver, completar con el resto de acciones (hasta ahora, solo Hold, Advance y Conversion)
+    - [ ] Gestor de conflictos (sin nombre aún)
+    - [ ] Gestor de retiradas.
 
 ### Desarrollos futuros
 

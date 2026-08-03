@@ -1,10 +1,23 @@
-# machiavelli/tables.py
+# machiavelli/game/tables.py
+
+from typing import Final, Literal, TypedDict
+
+
+class ExpenseInfo(TypedDict):
+    text: str
+    target_type: Literal["province", "power", "unit"]
+    cost: int
+
+
+class OrderInfo(TypedDict):
+    text: str
+    target_type: str | None
 
 
 class GameTables:
-    """Tablas del juego."""
+    """Tablas de datos estáticas, costes, órdenes y desastres de Machiavelli."""
 
-    variable_income = {
+    variable_income: Final[dict[str, list[int]]] = {
         "A": [1, 2, 3, 3, 4, 4],
         "L": [1, 2, 3, 3, 4, 5],
         "F": [1, 2, 3, 4, 5, 6],
@@ -19,9 +32,9 @@ class GameTables:
         "rome": [2, 2, 3, 4, 5, 6],
     }
 
-    assassination_rebellions = [1, 2, 3, 5]
+    assassination_rebellions: Final[list[int]] = [1, 2, 3, 5]
 
-    expenses = {
+    expenses: Final[dict[str, ExpenseInfo]] = {
         "A": {"text": "Paliar hambruna", "target_type": "province", "cost": 3},
         "B": {"text": "Pacificar rebelión", "target_type": "province", "cost": 12},
         "C": {
@@ -51,7 +64,7 @@ class GameTables:
         "K": {"text": "Comprar ejército o flota", "target_type": "unit", "cost": 18},
     }
 
-    disasters = [
+    disasters: Final[list[tuple[str, str]]] = [
         ("no", "Año excelente (sin desastre)"),
         ("row", "Buen año (solo fila)"),
         ("row", "Buen año (solo fila)"),
@@ -60,7 +73,7 @@ class GameTables:
         ("both", "Mal año (fila y columna)"),
     ]
 
-    powers = {
+    powers: Final[dict[str, str]] = {
         "M": "Milan",
         "V": "Venice",
         "L": "Florence",
@@ -71,9 +84,14 @@ class GameTables:
         "A": "Austria",
     }
 
-    actors = {"A": "Ejército", "F": "Flota", "G": "Guarnición", "E": "Gasto"}
+    actors: Final[dict[str, str]] = {
+        "A": "Ejército",
+        "F": "Flota",
+        "G": "Guarnición",
+        "E": "Gasto",
+    }
 
-    military_orders = {
+    military_orders: Final[dict[str, OrderInfo]] = {
         "A": {"text": "Avanzar a Provincia o Mar", "target_type": "location"},
         "B": {"text": "Asediar Ciudad", "target_type": None},
         "H": {"text": "Mantener", "target_type": None},
@@ -83,13 +101,13 @@ class GameTables:
         "C": {"text": "Convertir o desbandar", "target_type": "unit_type"},
     }
 
-    maintenance_orders = {
+    maintenance_orders: Final[dict[str, OrderInfo]] = {
         "M": {"text": "Mantener", "target_type": None},
         "D": {"text": "Desbandar", "target_type": None},
         "R": {"text": "Reclutar", "target_type": None},
     }
 
-    famine = [
+    famine: Final[list[list[str | None]]] = [
         [
             None,
             None,
@@ -191,7 +209,7 @@ class GameTables:
             "bosni",
             "tyrol",
             None,
-            "naples",
+            "naple",
             "romag",
             "dalma",
         ],
@@ -211,7 +229,7 @@ class GameTables:
         ],
     ]
 
-    plague = [
+    plague: Final[list[list[str | None]]] = [
         [
             "vicen",
             "swiss",
@@ -357,4 +375,9 @@ class GameTables:
         ],
     ]
 
-    seasons = ["Primavera (mantenimiento)", "Primavera (campaña)", "Verano", "Otoño"]
+    seasons: Final[list[str]] = [
+        "Primavera (mantenimiento)",
+        "Primavera (campaña)",
+        "Verano",
+        "Otoño",
+    ]

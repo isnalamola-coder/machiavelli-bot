@@ -7,7 +7,12 @@ from typing import Any, Self
 
 
 class EventType(StrEnum):
-    SEASON_START = "season_start"
+    # Inicio de fases
+    START_GAME = "start_game"
+    START_SEASON = "start_season"
+
+    # Inicio de partida
+    START_GAME_POWER_ASSIGNED = "start_game_power_assigned"
 
     # Desastres
     FAMINE_SPAWN = "famine_spawn"

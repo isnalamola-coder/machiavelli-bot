@@ -1,7 +1,7 @@
 # machiavelli/engine/expenditure.py
 
 from ..events import EventType, TurnEvent
-from ..game import Command, Game, Player
+from ..game.game import Command, Game, Player
 
 
 class ExpenditureProcessor:

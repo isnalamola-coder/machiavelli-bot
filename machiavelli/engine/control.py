@@ -2,7 +2,7 @@
 
 
 from ..events import EventType, TurnEvent
-from ..game import Game, Player
+from ..game.game import Game, Player
 
 
 class ControlManager:
@@ -180,6 +180,6 @@ class ControlManager:
 
         self.game.add_event(
             TurnEvent(
-                type=EventType.SEASON_START, data={"year": year, "season": season}
+                type=EventType.START_SEASON, data={"year": year, "season": season}
             )
         )

@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 from machiavelli.engine.disasters import DisastersManager
 from machiavelli.events import EventType, TurnEvent
-from machiavelli.game import Command
+from machiavelli.game.game import Command
 from tests.machiavelli.engine.helpers import create_mock_game
 
 
@@ -267,10 +267,10 @@ class TestSpawnDisaster(unittest.TestCase):
             "rome": Mock(),
             "sienn": Mock(),
         }
+        self.mock_game.map = self.mock_map
         self.mock_rng = Mock()
 
         self.manager = DisastersManager(game=self.mock_game, rng=self.mock_rng)
-        self.manager.map = self.mock_map
 
     def test_spawn_disaster_invalid_event_type(self):
         """Devuelve [] y no emite eventos si el event_type no es de desastre."""
