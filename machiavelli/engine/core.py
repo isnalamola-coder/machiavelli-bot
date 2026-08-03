@@ -3,14 +3,22 @@
 
 from random import Random
 
-from ..game import Game
+from ..game.game import Game
 from .assassination import AssassinationResolver
 from .bribes import BribeResolver
 from .control import ControlManager
 from .disasters import DisastersManager
+from .exceptions import (
+    DuplicatePlayerError,
+    GameAlreadyStartedError,
+    InvalidPlayerCountError,
+    ScenarioNotSelectedError,
+    TurnExecutionFailed,
+)
 from .expenditure import ExpenditureProcessor
 from .military import MilitaryResolver
 from .rebellions import RebellionManager
+from .setup import SetupManager
 
 
 class GameEngine:
@@ -21,7 +29,18 @@ class GameEngine:
         self.rng = rng if rng is not None else Random()
 
     def run_startup(self) -> None:
-        pass
+        """Ejecutamos el flujo completo del inicio de la partida."""
+        try:
+            SetupManager(self.game, self.rng).run()
+        except (
+            DuplicatePlayerError,
+            InvalidPlayerCountError,
+            ScenarioNotSelectedError,
+            GameAlreadyStartedError,
+        ) as e:
+            raise TurnExecutionFailed(
+                f"Fallo en la inicialización de la partida: {e}"
+            ) from e
 
     def run_maintenance(self) -> None:
         pass

@@ -3,8 +3,8 @@
 from random import Random
 from unittest.mock import Mock
 
-from machiavelli.engine import GameEngine
-from machiavelli.game import Game, Player
+from machiavelli.engine.core import GameEngine
+from machiavelli.game.game import Game, Player
 
 
 def create_mock_player(
@@ -16,6 +16,7 @@ def create_mock_player(
     home_countries: list[str] | None = None,
     rebelled_provinces: list[str] | None = None,
     rebelled_cities: list[str] | None = None,
+    discord_id: int | None = 0,
 ) -> Mock:
     """Crea un Mock con la especificación de Player."""
     player = Mock(spec=Player)
@@ -31,6 +32,7 @@ def create_mock_player(
         rebelled_provinces if rebelled_provinces is not None else []
     )
     player.rebelled_cities = rebelled_cities if rebelled_cities is not None else []
+    player.discord_id = discord_id
     return player
 
 
@@ -39,6 +41,9 @@ def create_mock_game(
     independent_garrisons: list[str] | None = None,
     famine: list[str] | None = None,
     provinces: set[str] | None = None,
+    turn_number: int = 0,
+    scenario: Mock | None = "default",
+    scenario_id: str | None = "scenario_1",
 ) -> Mock:
     """Crea un Mock con la especificación de Game y atributos por defecto."""
     game = Mock(spec=Game)
@@ -47,6 +52,13 @@ def create_mock_game(
         independent_garrisons if independent_garrisons is not None else []
     )
     game.famine = famine if famine is not None else []
+    game.turn_number = turn_number
+    game.scenario_id = scenario_id
+
+    if scenario == "default":
+        game.scenario = Mock(powers={})
+    else:
+        game.scenario = scenario
 
     if provinces is not None:
         game.map.provinces = provinces

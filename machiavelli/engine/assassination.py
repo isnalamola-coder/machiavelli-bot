@@ -1,7 +1,7 @@
 # machiavelli/engine/assassination.py
 
 
-from ..game import Game
+from ..game.game import Game
 
 
 class AssassinationResolver:

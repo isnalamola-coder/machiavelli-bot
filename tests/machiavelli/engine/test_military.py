@@ -5,7 +5,7 @@ from collections import defaultdict
 from unittest.mock import Mock, patch
 
 from machiavelli.engine.military import MilitaryResolver, MilitaryUnit
-from machiavelli.map import MovementMode
+from machiavelli.game.map import MovementMode
 
 
 class TestBuildConflictsMap(unittest.TestCase):

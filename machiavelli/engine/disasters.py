@@ -3,8 +3,8 @@
 from random import Random
 
 from ..events import EventType, TurnEvent
-from ..game import Game
-from ..tables import GameTables
+from ..game.game import Game
+from ..game.tables import GameTables
 
 
 class DisastersManager:
