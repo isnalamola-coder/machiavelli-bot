@@ -1,15 +1,25 @@
-# tests/test_machiavelli/test_game.py
+"""Pruebas de persistencia y reglas de Game relacionadas con la fase militar."""
+
+import json
 import sqlite3
+from contextlib import closing
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from machiavelli import database
+from machiavelli.events import EventType, TurnEvent
 from machiavelli.game import (
+    Command,
     DuplicatedGameException,
     Game,
     GameNotFoundException,
     Player,
 )
+from machiavelli.map import Map, Province
 
 
 def test_player_constructor():
@@ -43,12 +53,229 @@ def test_game_constructor():
     assert game.channel_id is None
 
 
+def test_military_event_round_trip_preserves_six_lists(tmp_path):
+    """Comprueba que el evento militar completo sobrevive al ciclo SQLite."""
+    db_path = tmp_path / "game.db"
+    database.upgrade(str(db_path))
+    event = TurnEvent.military_resolution(
+        [[["P1", "A", "rome"], "A", "pisa", False]],
+        [["P1", "A", "rome"]],
+        [],
+        [],
+        [["P1", "province", "rome", "subdued"]],
+        [],
+    )
+    with sqlite3.connect(db_path) as conn:
+        game = Game("Evento militar")
+        game.add_event(event)
+        game.save(conn)
+        loaded = Game.load_game(conn, game_id=game.database_id)
+
+    record = loaded.turn_events[-1]
+    prefix, payload = record.split("|", 1)
+    assert prefix == "military_resolution"
+    assert json.loads(payload) == event.data
+
+
+def test_military_event_is_canonical_compact_and_keeps_previous_records():
+    """Verifica orden, formato compacto y compatibilidad con eventos previos."""
+    event = TurnEvent.military_resolution(
+        [
+            [["V", "A", "zeta"], "A", "ñ", False],
+            [["M", "F", "alfa"], "F", "beta", False],
+        ],
+        [["V", "A", "zeta"], ["M", "F", "alfa"]],
+        [["V", "A", "zeta"]],
+        [["M", "F", "alfa"]],
+        [["V", "city", "ñ", "liberated"], ["M", "province", "alfa", "subdued"]],
+        [
+            [["V", "A", "zeta"], "ñ", "started"],
+            [["M", "F", "alfa"], "beta", "lifted"],
+        ],
+    )
+    assert event.data["outcomes"][0][0] == ["M", "F", "alfa"]
+    assert event.data["cancelled_orders"] == [["M", "F", "alfa"], ["V", "A", "zeta"]]
+    assert event.to_record() == (
+        'military_resolution|{"broken_convoys":[["V","A","zeta"]],'
+        '"cancelled_orders":[["M","F","alfa"],["V","A","zeta"]],'
+        '"dislodgements":[["M","F","alfa"]],'
+        '"outcomes":[[["M","F","alfa"],"F","beta",false],'
+        '[["V","A","zeta"],"A","ñ",false]],'
+        '"rebellions":[["M","province","alfa","subdued"],'
+        '["V","city","ñ","liberated"]],'
+        '"sieges":[[["M","F","alfa"],"beta","lifted"],'
+        '[["V","A","zeta"],"ñ","started"]]}'
+    )
+    assert TurnEvent.expense(EventType.EXPENSE, "M", "A", "a", 1).to_record() == str(
+        EventType.EXPENSE
+    )
+
+
+def test_military_event_rejects_non_primitive_or_malformed_lists():
+    """Rechaza payloads que no respetan el contrato serializable."""
+    malformed_lists = (
+        ([[["P", "X", "a"], "A", "b", False]], [], [], [], [], []),
+        ([[["P", "A", "a"], "X", "b", False]], [], [], [], [], []),
+        ([[["P", "A", "a"], "A", None, False]], [], [], [], [], []),
+        ([[["P", "A", "a"], "A", "b", True]], [], [], [], [], []),
+        ([], [["P", "X", "a"]], [], [], [], []),
+        ([], [], [["P", "A"]], [], [], []),
+        ([], [], [], [["P", "A", "a", "extra"]], [], []),
+        ([], [], [], [], [["P", "county", "a", "subdued"]], []),
+        ([], [], [], [], [["P", "province", "a", "invalid"]], []),
+        ([], [], [], [], [], [[["P", "X", "a"], "a", "started"]]),
+        ([], [], [], [], [], [[["P", "A", "a"], "a", ["started"]]]),
+    )
+    for values in malformed_lists:
+        with pytest.raises(ValueError):
+            TurnEvent.military_resolution(*values)
+    for index in range(6):
+        values = [[] for _ in range(6)]
+        values[index] = ()
+        with pytest.raises(ValueError):
+            TurnEvent.military_resolution(*values)
+
+
+def test_rebelled_city_recruitment_is_rejected_before_charging():
+    """Impide reclutar en ciudad rebelada sin descontar el coste."""
+    game_map = Map(
+        provinces={
+            "fort": Province(
+                "Fort", custom_id="fort", city="fortified", has_port=True
+            )
+        },
+        seas={},
+    )
+    scenario = SimpleNamespace(
+        year=1454,
+        province_home_country=lambda _province: "M",
+    )
+
+    def build_game(rebelled_cities):
+        """Crea el mismo mantenimiento con o sin rebelión urbana."""
+        game = Game(
+            "Mantenimiento",
+            turn_number=1,
+            scenario=scenario,
+            map=game_map,
+        )
+        player = Player(
+            game,
+            "P1",
+            controlled_locations=["fort"],
+            ducats=3,
+            rebelled_cities=list(rebelled_cities),
+            home_countries=["M"],
+            power="M",
+        )
+        player.commands = [Command(game, player, "G fort", "R", None)]
+        game.players = [player]
+        return game, player
+
+    rebelled_game, rebelled_player = build_game(["fort"])
+    rebelled_game.spring_maintenance()
+    assert rebelled_player.garrisons == []
+    assert rebelled_player.ducats == 3
+
+    normal_game, normal_player = build_game([])
+    normal_game.spring_maintenance()
+    assert normal_player.garrisons == ["fort"]
+    assert normal_player.ducats == 0
+
+
 # Tests on database functions
+
+
+def test_load_commands_orders_by_persisted_id():
+    """Exige que las filas de orden se carguen por su identificador persistido."""
+    mock_conn = MagicMock(spec=sqlite3.Connection)
+    mock_cursor = MagicMock(spec=sqlite3.Cursor)
+    mock_conn.cursor.return_value = mock_cursor
+    mock_cursor.fetchall.return_value = []
+
+    game = MagicMock(spec=Game)
+    game.database_id = 42
+    player = MagicMock(spec=Player)
+    player.player_id = "P1"
+
+    assert Command.load_commands(mock_conn, game, player) == []
+    mock_cursor.execute.assert_called_once_with(
+        "SELECT actor, command, target FROM commands "
+        "WHERE game_id = ? AND player_id = ? ORDER BY commands.id ASC",
+        (42, "P1"),
+    )
+
+
+def test_command_order_survives_repeated_loads_and_save_round_trip():
+    """Conserva el orden relativo de un convoy tras cargas y guardados sucesivos."""
+
+    def command_rows(game: Game) -> dict[str, tuple[tuple[str, str, str | None], ...]]:
+        """Extrae las órdenes en la secuencia observada por cada jugador."""
+        return {
+            player.player_id: tuple(
+                (command.actor, command.command, command.target)
+                for command in player.commands
+            )
+            for player in game.players
+        }
+
+    expected = {
+        "P1": (
+            ("A rome", "A", "tyrrh"),
+            ("A rome", "A", "westm"),
+            ("A rome", "A", "pisa"),
+        ),
+        "P2": (
+            ("A venic", "A", "ferrar"),
+            ("A venic", "H", None),
+        ),
+    }
+
+    assert database._SCHEMA_VERSION == 3
+    assert len(database._UPGRADES) == 3
+
+    with TemporaryDirectory() as directory:
+        db_path = Path(directory) / "commands.db"
+        database.upgrade(str(db_path))
+
+        with closing(sqlite3.connect(db_path)) as conn:
+            game = Game("Orden persistido")
+            game.players = [Player(game, "P1"), Player(game, "P2")]
+            game.save(conn)
+            conn.executemany(
+                "INSERT INTO commands "
+                "(game_id, player_id, actor, command, target) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    (game.database_id, "P1", "A rome", "A", "tyrrh"),
+                    (game.database_id, "P2", "A venic", "A", "ferrar"),
+                    (game.database_id, "P1", "A rome", "A", "westm"),
+                    (game.database_id, "P2", "A venic", "H", None),
+                    (game.database_id, "P1", "A rome", "A", "pisa"),
+                ),
+            )
+            conn.commit()
+
+            first_load = Game.load_game(conn, game_id=game.database_id)
+            second_load = Game.load_game(conn, game_id=game.database_id)
+            assert command_rows(first_load) == expected
+            assert command_rows(second_load) == expected
+
+            first_load.save(conn)
+            conn.commit()
+            after_first_save = Game.load_game(conn, game_id=game.database_id)
+            assert command_rows(after_first_save) == expected
+
+            after_first_save.save(conn)
+            conn.commit()
+            after_second_save = Game.load_game(conn, game_id=game.database_id)
+            assert command_rows(after_second_save) == expected
+            assert conn.execute("PRAGMA user_version").fetchone() == (3,)
 
 
 # database on Player
 def test_load_players_success():
-    """Comprueba que load_players ejecuta la query correcta y devuelve las instancias correspondientes de Player."""
+    """Comprueba la consulta y las instancias devueltas por load_players."""
     mock_conn = MagicMock(spec=sqlite3.Connection)
     mock_cursor = MagicMock(spec=sqlite3.Cursor)
     mock_conn.cursor.return_value = mock_cursor
@@ -80,18 +307,21 @@ def test_load_players_success():
         [
             call(
                 """
-            SELECT player_id, discord_id, controlled_locations, armies, fleets, garrisons,
-                ass_counters, ducats, rebelled_provinces, rebelled_cities, home_countries, power
+            SELECT player_id, discord_id, controlled_locations, armies, fleets,
+                garrisons, ass_counters, ducats, rebelled_provinces,
+                rebelled_cities, home_countries, power
             FROM players WHERE game_id = ?
             """,
                 (42,),
             ),
             call(
-                "SELECT actor, command, target FROM commands WHERE game_id = ? AND player_id = ?",
+                "SELECT actor, command, target FROM commands "
+                "WHERE game_id = ? AND player_id = ? ORDER BY commands.id ASC",
                 (42, "carlos_id"),
             ),
             call(
-                "SELECT actor, command, target FROM commands WHERE game_id = ? AND player_id = ?",
+                "SELECT actor, command, target FROM commands "
+                "WHERE game_id = ? AND player_id = ? ORDER BY commands.id ASC",
                 (42, "sofia_id"),
             ),
         ]
@@ -228,8 +458,9 @@ def test_load_game_success():
         mock_cursor.execute.assert_has_calls(
             [
                 call(
-                    "SELECT id, name, channel_id, scenario_id, turn_number, weekly_deadline, next_deadline, "
-                    "famine, independent_garrisons, besieges FROM games WHERE id = ?",
+                    "SELECT id, name, channel_id, scenario_id, turn_number, "
+                    "weekly_deadline, next_deadline, famine, independent_garrisons, "
+                    "besieges FROM games WHERE id = ?",
                     (7,),
                 ),
                 call(
@@ -243,7 +474,7 @@ def test_load_game_success():
 
 
 def test_load_game_raises_not_found_and_never_loads_players():
-    """Comprueba que si la partida no existe, se lanza la excepción y no se intenta llamar a la carga de jugadores."""
+    """No carga jugadores cuando la partida solicitada no existe."""
     mock_conn = MagicMock(spec=sqlite3.Connection)
     mock_cursor = MagicMock(spec=sqlite3.Cursor)
     mock_conn.cursor.return_value = mock_cursor
@@ -270,8 +501,10 @@ def test_game_save_inserts_new_game():
 
     # Verificamos que llamó al INSERT
     mock_cursor.execute.assert_any_call(
-        "INSERT INTO games (name, channel_id, scenario_id, turn_number, weekly_deadline, next_deadline, "
-        "famine, independent_garrisons, besieges) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO games "
+        "(name, channel_id, scenario_id, turn_number, weekly_deadline, "
+        "next_deadline, famine, independent_garrisons, besieges) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ("Nueva Partida", 111, None, 0, None, None, "[]", "[]", "[]"),
     )
     # Verificamos que el objeto actualizó su ID en memoria
@@ -294,8 +527,9 @@ def test_game_save_updates_existing_game():
 
     # Verificamos que ejecutó el UPDATE usando el ID como filtro
     mock_cursor.execute.assert_any_call(
-        "UPDATE games SET name = ?, channel_id = ?, scenario_id = ?, turn_number = ?, weekly_deadline = ?, "
-        "next_deadline = ?, famine = ?, independent_garrisons = ?, besieges = ? WHERE id = ?",
+        "UPDATE games SET name = ?, channel_id = ?, scenario_id = ?, "
+        "turn_number = ?, weekly_deadline = ?, next_deadline = ?, famine = ?, "
+        "independent_garrisons = ?, besieges = ? WHERE id = ?",
         ("Partida Renombrada", 222, None, 0, None, None, "[]", "[]", "[]", 42),
     )
     # El ID no debe haber cambiado

@@ -57,6 +57,9 @@ type DislodgementResolver = Callable[
 - No devuelve unidades que no estén desalojadas.
 - Incluye una decisión explícita para cada guarnición independiente desalojada; si
   todavía no dispone de política para ella, no debe invocarse como gestor válido.
+- Una guarnición eliminada por un segundo Besiege se representa en el contrato
+  cerrado como `dislodged=True` y `final_location=None`, aparece en
+  `dislodgements` y exige una decisión explícita `None`; no puede retirarse.
 - Interpreta `None` como eliminación conforme a sus propias reglas.
 - Rechaza como destino cualquier `contested_locations` y resuelve colisiones entre
   retiradas.
@@ -95,6 +98,8 @@ En todos los fallos:
 El texto base de la excepción es estable y breve. La información reproducible vive
 en `error.diagnostic`, no en un mensaje construido desde `repr()` ni desde el orden
 incidental de colecciones. El diagnóstico solo se usa en pruebas y logging interno.
+La estabilidad exige dos firmas consecutivas idénticas y cero conflictos pendientes;
+cualquier firma repetida con conflictos pendientes tras targeted/all es un deadlock.
 
 ## Discord execution boundary
 

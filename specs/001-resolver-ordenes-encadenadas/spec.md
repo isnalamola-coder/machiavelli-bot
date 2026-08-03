@@ -42,6 +42,9 @@ encadenadas, conflictos, rebeliones, asedios y retiradas.
 - Q: ¿Cuándo se registra el evento militar? → A: Se construye y valida antes del
   commit y su registro auditable se incluye en la misma sustitución atómica que el
   estado militar.
+- Q: ¿Cómo representa el contrato una guarnición eliminada por un asedio completo?
+  → A: Mantiene su `UnitKey`, usa `final_location=None` y `dislodged=True`, aparece
+  en `dislodgements` y el gestor debe devolver una decisión explícita `None`.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -383,8 +386,9 @@ idéntica.
   los apoyos restantes y continuar la resolución.
 - **FR-037**: La comprobación de estabilidad o ciclo DEBE distinguir apoyos activos,
   convoyes disponibles, movimientos y conversiones exitosos, desalojos,
-  autoconflictos cancelados y posiciones efectivas. Si, después del desempate
-  completo, reaparece un estado sin progreso determinista, el sistema DEBE abortar,
+  autoconflictos cancelados y posiciones efectivas. Solo dos firmas consecutivas
+  idénticas con cero conflictos pendientes son estabilidad; si, después de targeted y
+  all, reaparece cualquier firma con conflictos pendientes, el sistema DEBE abortar,
   conservar el estado militar inicial y producir un `CycleDiagnostic` inmutable con
   la etapa agotada, las iteraciones de primera aparición y repetición, los conflictos
   pendientes ordenados y la firma primitiva canónica del estado repetido.
@@ -413,7 +417,8 @@ idéntica.
   tiene puerto.
 - **FR-044**: Un Besiege válido DEBE iniciar el asedio si la ciudad no estaba
   asediada; un segundo Besiege válido y exitoso DEBE eliminar el objetivo y terminar
-  el asedio.
+  el asedio. Si el objetivo es una guarnición, su outcome DEBE conservar identidad,
+  usar `final_location=None` y `dislodged=True`, y exigir `None` al gestor.
 - **FR-045**: Una unidad que mantiene un asedio solo PUEDE ordenar Besiege, Hold o
   Lift siege; una guarnición asediada solo PUEDE ordenar Hold o Support a su
   provincia.

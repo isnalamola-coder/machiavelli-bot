@@ -59,7 +59,8 @@ _UPGRADES = (
         command TEXT NOT NULL,
         target TEXT,
         FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
-        FOREIGN KEY (game_id, player_id) REFERENCES players(game_id, player_id) ON DELETE CASCADE
+        FOREIGN KEY (game_id, player_id)
+            REFERENCES players(game_id, player_id) ON DELETE CASCADE
     );
     """,
 )
@@ -71,19 +72,23 @@ logger = logging.getLogger(__name__)
 def upgrade(db_path: str):
     """Comprueba el schema de la base de datos y la actualiza, si es necesario.
 
-    Lee el pragma 'user_version' actual de la base de datos y lo compara con la versión del código objetivo
-    (`_SCHEMA_VERSION`). Si la base de datos no está actualizada, ejecuta de forma secuencial y ordenada los scripts de
+    Lee el pragma 'user_version' actual de la base de datos y lo compara con
+    la versión del código objetivo (`_SCHEMA_VERSION`). Si la base de datos no
+    está actualizada, ejecuta de forma secuencial y ordenada los scripts de
     `_UPGRADES`.
 
-    Si un script de falla en un paso intermedio, los cambios de ese paso concreto se revierten por completo (rollback),
-    asegurando que la base de datos quede en un estado consistente y se marca con la versión del último schema
-    actualizaco con éxito.
+    Si un script falla en un paso intermedio, los cambios de ese paso concreto
+    se revierten por completo (rollback), asegurando que la base de datos quede
+    en un estado consistente y se marca con la versión del último schema
+    actualizado con éxito.
 
     Args:
         db_path (str): Ruta al archivo de la base de datos SQLite.
 
     Raises:
-        Exception: Si ocurre un error al ejecutar un script de SQL, deshace el paso actual y eleva la Excepción."""
+        Exception: Si ocurre un error al ejecutar un script de SQL, deshace el
+            paso actual y eleva la excepción.
+    """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
@@ -93,7 +98,11 @@ def upgrade(db_path: str):
         current = cursor.fetchone()[0]
 
         if current < _SCHEMA_VERSION:
-            logger.warning(f"Actualiza el schema de la BBDD de {current} a {_SCHEMA_VERSION}")
+            logger.warning(
+                "Actualiza el schema de la BBDD de %s a %s",
+                current,
+                _SCHEMA_VERSION,
+            )
 
             try:
                 for v in range(current, _SCHEMA_VERSION):

@@ -101,10 +101,11 @@ sin una librería de grafos.
 
 **Decision**: Aplicar tres etapas deterministas: conflictos independientes; cancelar
 apoyos atacados desde otro origen; cancelar todos los apoyos. Comparar después una
-firma primitiva completa y abortar solo si reaparece una firma no consecutiva sin
-una regla de desempate restante. El aborto construye un `CycleDiagnostic` inmutable
-con etapa agotada, iteraciones, conflictos pendientes ordenados y la firma canónica
-exacta, que se adjunta a `UnresolvedMilitaryConflict`.
+firma primitiva completa: solo dos firmas consecutivas idénticas sin conflictos
+pendientes son estabilidad; cualquier firma repetida con conflictos pendientes tras
+targeted/all aborta. El aborto construye un `CycleDiagnostic` inmutable con etapa
+agotada, iteraciones, conflictos pendientes ordenados y la firma canónica exacta,
+que se adjunta a `UnresolvedMilitaryConflict`.
 
 **Rationale**: Implementa las aclaraciones sin escoger arbitrariamente un punto fijo.
 La firma incluye todas las relaciones que pueden cambiar un resultado y el objeto

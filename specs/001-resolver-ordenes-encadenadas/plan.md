@@ -190,8 +190,9 @@ No quedan aclaraciones técnicas pendientes.
 6. Si no hay conflicto independiente, cancelar primero los apoyos atacados por un
    Advance válido, activo y no cancelado desde un origen distinto del lugar apoyado,
    incluyendo convoyes disponibles. Si sigue el círculo, cancelar todos los apoyos.
-7. Comparar firmas primitivas completas. Una firma consecutiva igual es estabilidad;
-   una firma anterior no consecutiva después de los dos desempates aborta.
+7. Comparar firmas primitivas completas. Solo una firma consecutiva idéntica con cero
+   conflictos pendientes es estabilidad; cualquier firma repetida con conflictos
+   pendientes después de targeted/all aborta.
 8. Al abortar por ciclo, construir `CycleDiagnostic` con etapa agotada, iteraciones,
    conflictos pendientes ordenados y la firma canónica exacta; adjuntarlo a
    `UnresolvedMilitaryConflict` sin interpolar objetos mutables en el mensaje.

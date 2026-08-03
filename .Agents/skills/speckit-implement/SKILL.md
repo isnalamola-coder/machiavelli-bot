@@ -1,6 +1,6 @@
 ---
 name: "speckit-implement"
-description: "Execute the implementation plan by processing and executing all tasks defined in tasks.md"
+description: "Execute all tasks in tasks.md, or one selected task when given a T### ID or GitHub issue number"
 compatibility: "Requires spec-kit project structure with .specify/ directory"
 metadata:
   author: "github-spec-kit"
@@ -15,6 +15,18 @@ $ARGUMENTS
 ```
 
 You **MUST** consider the user input before proceeding (if not empty).
+
+## Task Scope
+
+If `$ARGUMENTS` contains exactly one task ID (`T###`) or GitHub issue number (`#<number>`):
+
+1. Locate its corresponding task in `tasks.md`; stop if it does not exist or is already `[X]`.
+2. Execute only that task. Do not execute other pending tasks.
+3. Stop if its prerequisite tasks are not marked `[X]`.
+4. Run the relevant validation and mark only that task as `[X]`.
+5. Do not commit, push, or create a pull request unless the user explicitly requests it.
+
+Otherwise, execute the complete task list as described below.
 
 ## Pre-Execution Checks
 
@@ -146,7 +158,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    - **Task details**: ID, description, file paths, parallel markers [P]
    - **Execution flow**: Order and dependency requirements
 
-6. Execute implementation following the task plan:
+6. Execute implementation following the task plan, limited to the selected task when Task Scope applies:
    - **Phase-by-phase execution**: Complete each phase before moving to the next
    - **Respect dependencies**: Run sequential tasks in order, parallel tasks [P] can run together  
    - **Follow TDD approach**: Execute test tasks before their corresponding implementation tasks
@@ -169,7 +181,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    - **IMPORTANT** For completed tasks, make sure to mark the task off as [X] in the tasks file.
 
 9. Completion validation:
-   - Verify all required tasks are completed
+   - Verify all required tasks are completed, or that the selected task is completed when Task Scope applies
    - Check that implemented features match the original specification
    - Validate that tests pass and coverage meets requirements
    - Confirm the implementation follows the technical plan
@@ -217,7 +229,7 @@ Report final status with summary of completed work.
 
 ## Done When
 
-- [ ] All tasks in tasks.md completed and marked `[X]`
+- [ ] All tasks in tasks.md completed and marked `[X]`, or the selected task marked `[X]` when Task Scope applies
 - [ ] Implementation validated against specification, plan, and test coverage
 - [ ] Extension hooks dispatched or skipped according to the rules in Mandatory Post-Execution Hooks above
 - [ ] Completion reported to user with summary of completed work

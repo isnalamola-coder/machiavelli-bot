@@ -515,7 +515,7 @@ class TestBribeResolverRun(unittest.TestCase):
         self.player2.commands = [cmd_bribe]
 
         # Ejecutar run()
-        result = self.resolver.run()
+        self.resolver.run()
 
         # Verificaciones
         mock_expense_counterbribe.assert_called_once_with(

@@ -121,7 +121,10 @@ Resultado militar físico previo a la retirada.
 | `dislodged` | `bool` | Conserva la unidad para el gestor |
 
 Una unidad no desalojada aparece una vez en origen o destino. Una desalojada no
-ocupa el tablero militar y mantiene su identidad en el paquete de resolución.
+ocupa el tablero militar y mantiene su identidad en el paquete de resolución. Como
+el modelo no define un estado adicional de «destruida», una guarnición eliminada por
+un segundo Besiege usa también `final_location=None` y `dislodged=True`; el gestor
+debe devolver `None` para ella y el evento la incluye en `dislodgements`.
 
 ## MilitaryResolution
 
@@ -170,9 +173,10 @@ El gestor devuelve un mapping:
 
 El mapping debe contener exactamente todas las unidades desalojadas y ninguna otra,
 incluidas las guarniciones independientes. La política de destino, colisiones y
-retirada de estas guarniciones pertenece al gestor externo. Si no existe un gestor
-con esa política o falta su entrada, la resolución aborta y el snapshot completo
-permanece intacto; no se crea una colección persistida de pendientes.
+retirada de estas guarniciones pertenece al gestor externo, salvo la guarnición
+eliminada por asedio completo, cuya única decisión válida es `None`. Si no existe un
+gestor con esa política o falta su entrada, la resolución aborta y el snapshot
+completo permanece intacto; no se crea una colección persistida de pendientes.
 
 ## Índices internos
 
