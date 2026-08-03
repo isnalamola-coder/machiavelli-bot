@@ -87,7 +87,10 @@ def test_upgrade_database_fails_at_second_step(mock_sqlite3):
     # Configurar el comportamiento sucesivo de executescript:
     # Primera llamada (Paso 1): Todo va bien (devuelve None)
     # Segunda llamada (Paso 2): Falla con un error de SQLite
-    mock_cursor.executescript.side_effect = [None, sqlite3.OperationalError("Syntax error in Step 2")]
+    mock_cursor.executescript.side_effect = [
+        None,
+        sqlite3.OperationalError("Syntax error in Step 2"),
+    ]
 
     # El test pasará SOLÓ si la función 'upgrade' relanza este error exacto.
     with pytest.raises(sqlite3.OperationalError, match="Syntax error in Step 2"):
@@ -105,7 +108,7 @@ def test_upgrade_database_fails_at_second_step(mock_sqlite3):
         assert "user_version = 2" not in args[0]
         assert "user_version = 3" not in args[0]
 
-    # verificamos los rollback y commits
-    mock_conn.rollback.assert_called_once()  # Se deshacen los cambios del paso 2 que falló
-    mock_conn.commit.assert_not_called()  # Nunca se llega al commit definitivo del final del bucle
-    mock_conn.close.assert_called_once()  # La conexión se cierra obligatoriamente pese al error
+    # Verificamos el rollback, la ausencia de commit y el cierre de la conexión.
+    mock_conn.rollback.assert_called_once()
+    mock_conn.commit.assert_not_called()
+    mock_conn.close.assert_called_once()
