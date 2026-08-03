@@ -270,6 +270,7 @@ class TestSpawnDisaster(unittest.TestCase):
         self.mock_game.map = self.mock_map
         self.mock_rng = Mock()
 
+        self.mock_game.map = self.mock_map
         self.manager = DisastersManager(game=self.mock_game, rng=self.mock_rng)
 
     def test_spawn_disaster_invalid_event_type(self):
