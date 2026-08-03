@@ -16,17 +16,24 @@ from .exceptions import (
     TurnExecutionFailed,
 )
 from .expenditure import ExpenditureProcessor
-from .military import MilitaryResolver
+from .military import DislodgementResolver, MilitaryResolver
 from .rebellions import RebellionManager
 from .setup import SetupManager
 
 
 class GameEngine:
-    """Administra toda la lógica del juego"""
+    """Coordina las fases del turno y respeta sus barreras de error."""
 
-    def __init__(self, game: Game, rng: Random | None = None):
+    def __init__(
+        self,
+        game: Game,
+        rng: Random | None = None,
+        dislodgement_resolver: DislodgementResolver | None = None,
+    ):
+        """Configura el motor y el gestor opcional de retiradas militares."""
         self.game = game
         self.rng = rng if rng is not None else Random()
+        self.dislodgement_resolver = dislodgement_resolver
 
     def run_startup(self) -> None:
         """Ejecutamos el flujo completo del inicio de la partida."""
@@ -82,7 +89,10 @@ class GameEngine:
         RebellionManager(self.game).rebellion_expenses()
         BribeResolver(self.game).run()
         AssassinationResolver(self.game).run()
-        MilitaryResolver(self.game).run()
+        # Un fallo militar interrumpe la campaña antes de hambre, control y plaga.
+        MilitaryResolver(self.game).run(
+            dislodgement_resolver=self.dislodgement_resolver
+        )
         if season == 2:
             disaster_manager.resolve_famine_attrition()
         ControlManager(self.game).run()
