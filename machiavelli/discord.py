@@ -1,13 +1,23 @@
 # machiavelli/discord.py
+import asyncio
+import logging
 import os
 import sqlite3
 import traceback
+from contextlib import closing
 from datetime import datetime
 
 import discord
 from discord import app_commands
 
 from machiavelli.engine import GameEngine
+from machiavelli.engine.military import (
+    DislodgementResolver,
+    DislodgementResolverRequired,
+    InvalidMilitaryState,
+    MilitaryResolutionError,
+    UnresolvedMilitaryConflict,
+)
 from machiavelli.game import (
     Command,
     DuplicatedGameException,
@@ -19,6 +29,8 @@ from machiavelli.game import (
 from machiavelli.scenario import Scenario
 from machiavelli.tables import GameTables
 
+logger = logging.getLogger(__name__)
+
 # Estructura del documento (para orientarme)
 # 1. Grupos de comandos
 # 2. Inicializa los comandos
@@ -27,7 +39,7 @@ from machiavelli.tables import GameTables
 
 
 def format_error_with_location(e: Exception) -> str:
-    """Extrae el nombre de la excepción, el mensaje, el archivo y la línea exacta del error."""
+    """Extrae tipo, mensaje y localización de una excepción."""
     # Obtenemos la lista de marcos de la pila donde ocurrió la excepción
     tb_list = traceback.extract_tb(e.__traceback__)
 
@@ -40,7 +52,10 @@ def format_error_with_location(e: Exception) -> str:
         lineno = last_frame.lineno
         func_name = last_frame.name
 
-        return f"`{type(e).__name__}: {e}`\nUbicación: `{filename}:{lineno}` en `{func_name}()`"
+        return (
+            f"`{type(e).__name__}: {e}`\n"
+            f"Ubicación: `{filename}:{lineno}` en `{func_name}()`"
+        )
 
     return f"`{type(e).__name__}: {e}`"
 
@@ -65,7 +80,7 @@ admin_group.db_path = DB_PATH
 
 
 def init_game_commands(db_path: str) -> tuple[app_commands.Group, app_commands.Group]:
-    """Configura dinámicamente la ruta de la BBDD en el grupo de comandos y lo devuelve."""
+    """Configura la ruta de BBDD de ambos grupos de comandos."""
     game_group.db_path = db_path
     admin_group.db_path = db_path
     return game_group, admin_group
@@ -86,8 +101,8 @@ async def create(interaction: discord.Interaction, name: str):
             )
 
         await interaction.followup.send(
-            f"**¡Partida Creada!**\n"
-            f"Se ha creado la partida *'{game.name}'* en el canal <#{interaction.channel_id}>.\n"
+            f"**¡Partida Creada!**\nSe ha creado la partida *'{game.name}'* "
+            f"en el canal <#{interaction.channel_id}>.\n"
             f"ID de registro: `{game.database_id}`. ¡Que comience la diplomacia!"
         )
 
@@ -115,12 +130,17 @@ async def add_player(
 
             if any(p.discord_id == discord_player.id for p in game.players):
                 await interaction.followup.send(
-                    f"**Error:** El usuario {discord_player.mention} ya está inscrito en esta partida."
+                    f"**Error:** El usuario {discord_player.mention} ya está "
+                    "inscrito en esta partida."
                 )
                 return
 
-            # Crea el Player usando el nombre como player_id y el usuario como discord_id
-            new_player = Player(game=game, player_id=name, discord_id=discord_player.id)
+            # Crea el Player con el nombre y usuario indicados.
+            new_player = Player(
+                game=game,
+                player_id=name,
+                discord_id=discord_player.id,
+            )
 
             # Lo añade a la lista de la partida en memoria
             game.players.append(new_player)
@@ -139,7 +159,8 @@ async def add_player(
         formatted_output = "\n".join(report)
 
         await interaction.followup.send(
-            f"El jugador **'{name}'** (<@{discord_player.id}>) se ha unido con éxito a la partida *'{game.name}'*.\n\n"
+            f"El jugador **'{name}'** (<@{discord_player.id}>) se ha unido "
+            f"con éxito a la partida *'{game.name}'*.\n\n"
             f"Jugadores inscritos hasta ahora:\n{formatted_output}"
         )
 
@@ -173,7 +194,8 @@ async def remove_player(interaction: discord.Interaction, discord_user: discord.
 
             if not player:
                 await interaction.followup.send(
-                    f"**Error:** El usuario {discord_user.mention} no está inscrito en la partida *'{game.name}'*."
+                    f"**Error:** El usuario {discord_user.mention} no está "
+                    f"inscrito en la partida *'{game.name}'*."
                 )
                 return
 
@@ -240,8 +262,8 @@ async def set_scenario(interaction: discord.Interaction, scenario_id: str):
             game.save(conn)
 
         await interaction.followup.send(
-            f"**¡Escenario Configurado!**\n"
-            f"La partida *'{game.name}'* jugará al escenario: **{escenario_elegido.name}**."
+            f"**¡Escenario Configurado!**\nLa partida *'{game.name}'* "
+            f"jugará al escenario: **{escenario_elegido.name}**."
         )
 
     except GameNotFoundException:
@@ -259,7 +281,7 @@ async def set_scenario(interaction: discord.Interaction, scenario_id: str):
 async def set_scenario_autocomplete(
     interaction: discord.Interaction, current: str
 ) -> list[app_commands.Choice[str]]:
-    """Genera dinámicamente la lista de sugerencias mientras el usuario escribe."""
+    """Genera sugerencias mientras el usuario escribe."""
 
     # Cargamos tu diccionario {str: Scenario}
     escenarios_disponibles = Scenario.load_scenarios()
@@ -287,7 +309,10 @@ async def set_scenario_autocomplete(
 @app_commands.describe(
     dia_semanal="El día de la semana en que se procesarán los turnos de forma habitual",
     hora_semanal="La hora del deadline semanal (Formato HH:MM, ej: 22:00)",
-    proximo_deadline="Fecha exacta del siguiente turno (Formato: DD/MM/AAAA HH:MM, ej: 22/07/2026 22:00)",
+    proximo_deadline=(
+        "Fecha exacta del siguiente turno "
+        "(Formato: DD/MM/AAAA HH:MM, ej: 22/07/2026 22:00)"
+    ),
 )
 # Creamos un desplegable cerrado para los días de la semana
 @app_commands.choices(
@@ -320,7 +345,8 @@ async def set_deadlines(
                 # Si me dan el día, exijo la hora, y viceversa
                 if not (dia_semanal and hora_semanal):
                     await interaction.followup.send(
-                        "**Error:** Para fijar el horario semanal debes indicar tanto el día como la hora."
+                        "**Error:** Para fijar el horario semanal debes indicar "
+                        "tanto el día como la hora."
                     )
                     return
 
@@ -329,7 +355,8 @@ async def set_deadlines(
                     datetime.strptime(hora_semanal, "%H:%M")
                 except ValueError:
                     await interaction.followup.send(
-                        "**Error:** La hora semanal debe tener el formato `HH:MM` (ej: `22:00` o `09:30`)."
+                        "**Error:** La hora semanal debe tener el formato "
+                        "`HH:MM` (ej: `22:00` o `09:30`)."
                     )
                     return
 
@@ -339,19 +366,20 @@ async def set_deadlines(
             # VALIDACIÓN DEL PRÓXIMO DEADLINE ESPECÍFICO
             if proximo_deadline:
                 try:
-                    # Parseamos lo que escribe el usuario (Formato natural en español: DD/MM/AAAA HH:MM)
+                    # Parseamos el formato natural DD/MM/AAAA HH:MM.
                     fecha_parsed = datetime.strptime(proximo_deadline, "%d/%m/%Y %H:%M")
 
                     # Lo guardamos en formato ISO (AAAA-MM-DD HH:MM) para la BBDD
                     game.next_deadline = fecha_parsed.strftime("%Y-%m-%d %H:%M")
 
-                    # Pero para mostrárselo al usuario en el mensaje, usamos un formato bonito
+                    # Para el mensaje usamos un formato legible.
                     fecha_bonita = fecha_parsed.strftime("%A, %d de %B a las %H:%M")
                     cambios.append(f"**Próximo Deadline:** `{fecha_bonita}`")
                 except ValueError:
                     await interaction.followup.send(
                         "**Error:** El formato del próximo deadline es incorrecto.\n"
-                        "Debe ser estrictamente: `DD/MM/AAAA HH:MM` (ej: `22/07/2026 22:00`)."
+                        "Debe ser estrictamente: `DD/MM/AAAA HH:MM` "
+                        "(ej: `22/07/2026 22:00`)."
                     )
                     return
 
@@ -367,8 +395,8 @@ async def set_deadlines(
         # Generamos una respuesta elegante listando lo que ha cambiado
         resumen = "\n".join(cambios)
         await interaction.followup.send(
-            f"**¡Plazos Actualizados!**\n"
-            f"Se han guardado los nuevos plazos para la partida *'{game.name}'*:\n{resumen}"
+            f"**¡Plazos Actualizados!**\nSe han guardado los nuevos plazos "
+            f"para la partida *'{game.name}'*:\n{resumen}"
         )
 
     except GameNotFoundException:
@@ -381,57 +409,109 @@ async def set_deadlines(
         )
 
 
+def _execute_game_turn(
+    db_path: str,
+    channel_id: int,
+    *,
+    dislodgement_resolver: DislodgementResolver | None = None,
+) -> tuple[str, ...]:
+    """Ejecuta la transacción síncrona completa dentro del worker."""
+    # La conexión y el estado mutable no salen del hilo de trabajo.
+    with closing(sqlite3.connect(db_path)) as conn:
+        with conn:
+            game = Game.load_game(conn, channel_id=channel_id)
+            engine = GameEngine(
+                game,
+                dislodgement_resolver=dislodgement_resolver,
+            )
+            engine.run()
+            report = tuple(game.turn_report())
+            game.save(conn)
+    return report
+
+
+def _military_error_message(error: MilitaryResolutionError) -> str:
+    """Traduce errores militares a orientación pública sin detalles internos."""
+    prefix = "No se pudo resolver la fase militar; no se aplicó ningún cambio."
+    if isinstance(error, InvalidMilitaryState):
+        guidance = (
+            " Revisa que no haya unidades duplicadas ni ocupaciones incompatibles "
+            "antes de reintentar."
+        )
+    elif isinstance(error, UnresolvedMilitaryConflict):
+        guidance = (
+            " Revisa las órdenes y, si el problema se repite con las mismas entradas, "
+            "comunícalo al administrador."
+        )
+    elif isinstance(error, DislodgementResolverRequired):
+        guidance = " Activa la gestión de retiradas antes de reintentar."
+    else:
+        guidance = " Reintenta el turno y comunica el fallo si persiste."
+    return prefix + guidance
+
+
 @admin_group.command(
     name="run_game", description="Ejecuta y procesa el turno actual de la partida"
 )
 async def run_game(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=False)
+    """Ejecuta un turno fuera del event loop y publica solo el resultado seguro."""
+    await interaction.response.defer(ephemeral=True)
 
     try:
-        with sqlite3.connect(admin_group.db_path) as conn:
-            # Cargamos la partida según el canal de Discord actual
-            game = Game.load_game(conn, channel_id=interaction.channel_id)
-
-            # Ejecutamos el turno mediante el nuevo motor
-            engine = GameEngine(game)
-            engine.run()
-
-            # Obtenemos el reporte generado en el turno
-            report = game.turn_report()
-
-            # Guardamos en la BBDD los cambios producidos por el motor
-            game.save(conn)
-
-        if not report:
-            await interaction.followup.send(
-                "El turno se ha procesado, pero no se ha generado ninguna línea de reporte."
-            )
-            return
-
-        current_message = ""
-        for line in report:
-            # Comprobamos si añadir esta línea supera el límite de Discord
-            if len(current_message) + len(line) + 1 > 1950:
-                await interaction.followup.send(current_message)
-                current_message = line
-            else:
-                current_message = (
-                    f"{current_message}\n{line}" if current_message else line
-                )
-
-        # Enviamos el último bloque acumulado
-        if current_message:
-            await interaction.followup.send(current_message)
-
+        # SQLite, motor y guardado se ejecutan juntos para no bloquear Discord.
+        report = await asyncio.to_thread(
+            _execute_game_turn,
+            admin_group.db_path,
+            interaction.channel_id,
+        )
     except GameNotFoundException:
-        await interaction.followup.send(
-            "**Error:** No hay ninguna partida activa en este canal para poder ejecutarla."
+        await interaction.edit_original_response(
+            content=(
+                "**Error:** No hay ninguna partida activa en este canal para poder "
+                "ejecutarla."
+            )
         )
-    except Exception as e:
-        error_detallado = format_error_with_location(e)
-        await interaction.followup.send(
-            f"**Error inesperado al ejecutar el turno:** `{error_detallado}`."
+        return
+    except MilitaryResolutionError as error:
+        # El diagnóstico completo queda en logs; el usuario recibe orientación segura.
+        logger.exception(
+            "La fase militar abortó sin commit",
+            extra={"cycle_diagnostic": getattr(error, "diagnostic", None)},
         )
+        await interaction.edit_original_response(
+            content=_military_error_message(error)
+        )
+        return
+    except Exception as error:
+        error_detallado = format_error_with_location(error)
+        await interaction.edit_original_response(
+            content=f"**Error inesperado al ejecutar el turno:** {error_detallado}."
+        )
+        return
+
+    # Al completar el turno, la respuesta efímera se sustituye por el informe público.
+    await interaction.delete_original_response()
+    if not report:
+        await interaction.followup.send(
+            "El turno se ha procesado, pero no se ha generado ninguna "
+            "línea de reporte.",
+            ephemeral=False,
+        )
+        return
+
+    current_message = ""
+    # Se conserva el orden del informe y se deja margen respecto al límite de Discord.
+    for line in report:
+        if len(current_message) + len(line) + 1 > 1950:
+            await interaction.followup.send(current_message, ephemeral=False)
+            current_message = line
+        else:
+            current_message = (
+                f"{current_message}\n{line}" if current_message else line
+            )
+
+    if current_message:
+        await interaction.followup.send(current_message, ephemeral=False)
 
 
 # 5. Comandos de los jugadores
@@ -442,8 +522,8 @@ async def run_game(interaction: discord.Interaction):
     description="Muestra el estado actual de la partida en este canal",
 )
 async def game_status(interaction: discord.Interaction):
-    # Deferimos porque leer la base de datos y procesar el estado puede tomar un instante
-    await interaction.response.defer(ephemeral=True)
+    # La lectura y preparación del estado puede tardar.
+    await interaction.response.defer(ephemeral=False)
 
     try:
         with sqlite3.connect(game_group.db_path) as conn:
@@ -462,7 +542,7 @@ async def game_status(interaction: discord.Interaction):
             )
 
         # Enviamos el reporte maquetado al canal
-        await interaction.followup.send(mensaje_status, ephemeral=True)
+        await interaction.followup.send(mensaje_status)
 
     except GameNotFoundException:
         await interaction.followup.send(
@@ -479,7 +559,7 @@ async def game_status(interaction: discord.Interaction):
     name="game_report", description="Muestra el informe del último turno jugado"
 )
 async def game_report(interaction: discord.Interaction):
-    # Deferimos porque leer la base de datos y procesar el estado puede tomar un instante
+    # La lectura y preparación del informe puede tardar.
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -491,19 +571,18 @@ async def game_report(interaction: discord.Interaction):
 
         current_message = ""
 
-        for l in report:
-            # Comprobamos si añadir esta línea supera el límite de Discord (dejamos margen de seguridad)
-            if len(current_message) + len(l) + 1 > 1950:
-                # Enviamos lo que llevamos acumulado hasta ahora
+        for line in report:
+            # Conservamos margen respecto al límite de Discord.
+            if len(current_message) + len(line) + 1 > 1950:
+                # Enviamos lo acumulado y abrimos un bloque nuevo.
                 await interaction.followup.send(current_message, ephemeral=True)
-                # Empezamos el nuevo bloque con la línea actual
-                current_message = l
+                current_message = line
             else:
-                # Si cabe, la acumulamos separada por un salto de línea
+                # Si cabe, la acumulamos separada por un salto de línea.
                 if current_message:
-                    current_message += f"\n{l}"
+                    current_message += f"\n{line}"
                 else:
-                    current_message = l
+                    current_message = line
 
         # Enviamos el último bloque que haya quedado rezagado en el bucle
         if current_message:
@@ -511,12 +590,13 @@ async def game_report(interaction: discord.Interaction):
 
     except GameNotFoundException:
         await interaction.followup.send(
-            "**Error:** No hay ninguna partida activa en este canal para poder ejecutarla.",
+            "**Error:** No hay ninguna partida activa en este canal.",
             ephemeral=True,
         )
     except Exception as e:
         await interaction.followup.send(
-            f"**Error inesperado al mostrar el informe:** `{type(e).__name__}: {e}`.",
+            "**Error inesperado al mostrar el informe:** "
+            f"`{type(e).__name__}: {e}`.",
             ephemeral=True,
         )
 
@@ -581,7 +661,7 @@ async def cmdlist(interaction: discord.Interaction):
 
 
 def _resolve_player(game: Game, interaction: discord.Interaction) -> Player | None:
-    """Devuelve el Player correspondiente según si se especificó 'power' (admin) o por el ID de Discord."""
+    """Resuelve el jugador por potencia administrativa o ID de Discord."""
     selected_power = getattr(interaction.namespace, "power", None)
 
     # Modo administrador
@@ -889,18 +969,18 @@ async def cmd_user(
     command: str,
     target: str = None,
 ):
-    await interaction.response.defer(ephemeral=False)
+    await interaction.response.defer(ephemeral=True)
 
     try:
         with sqlite3.connect(admin_group.db_path) as conn:
             game = Game.load_game(conn, channel_id=interaction.channel_id)
-            # Buscamos al jugador por su código de potencia en lugar del discord_id
+            # Buscamos al jugador por su código de potencia.
             player = next((p for p in game.players if p.power == power), None)
 
             if not player:
                 await interaction.followup.send(
-                    f"**Error:** No se encontró a la potencia `{power}` en esta partida.",
-                    ephemeral=False,
+                    f"**Error:** No se encontró la potencia `{power}` en la partida.",
+                    ephemeral=True,
                 )
                 return
 
@@ -908,7 +988,7 @@ async def cmd_user(
             if actor not in valid_actor:
                 await interaction.followup.send(
                     f"**Error:** `{actor}` no es un actor válido.",
-                    ephemeral=False,
+                    ephemeral=True,
                 )
                 return
 
@@ -916,7 +996,7 @@ async def cmd_user(
             if command not in valid_command:
                 await interaction.followup.send(
                     f"**Error:** `{command}` no es una orden válida.",
-                    ephemeral=False,
+                    ephemeral=True,
                 )
                 return
 
@@ -926,7 +1006,7 @@ async def cmd_user(
             if valid_target and valid_target[0] != "" and target not in valid_target:
                 await interaction.followup.send(
                     f"**Error:** `{target}` no es un objetivo válido.",
-                    ephemeral=False,
+                    ephemeral=True,
                 )
                 return
 
@@ -937,16 +1017,16 @@ async def cmd_user(
 
         report = "\n".join(lines)
 
-        await interaction.followup.send(f"{report}", ephemeral=False)
+        await interaction.followup.send(f"{report}", ephemeral=True)
 
     except GameNotFoundException:
         await interaction.followup.send(
-            "**Error:** No hay ninguna partida activa en este canal.", ephemeral=False
+            "**Error:** No hay ninguna partida activa en este canal.", ephemeral=True
         )
     except Exception as e:
         error_detallado = format_error_with_location(e)
         await interaction.followup.send(
-            f"**Error inesperado:** {error_detallado}", ephemeral=False
+            f"**Error inesperado:** {error_detallado}", ephemeral=True
         )
 
 
@@ -1060,13 +1140,13 @@ async def expense_user(
     try:
         with sqlite3.connect(admin_group.db_path) as conn:
             game = Game.load_game(conn, channel_id=interaction.channel_id)
-            # Buscamos al jugador por su código de potencia en lugar del discord_id
+            # Buscamos al jugador por su código de potencia.
             player = next((p for p in game.players if p.power == power), None)
 
             if not player:
                 await interaction.followup.send(
-                    f"**Error:** No se encontró a la potencia `{power}` en esta partida.",
-                    ephemeral=False,
+                    f"**Error:** No se encontró la potencia `{power}` en la partida.",
+                    ephemeral=True,
                 )
                 return
 
@@ -1074,7 +1154,7 @@ async def expense_user(
             if expense not in valid_expense:
                 await interaction.followup.send(
                     f"**Error:** `{expense}` no es un gasto válido.",
-                    ephemeral=False,
+                    ephemeral=True,
                 )
                 return
 
@@ -1082,7 +1162,7 @@ async def expense_user(
             if target not in valid_target:
                 await interaction.followup.send(
                     f"**Error:** `{target}` no es un objetivo válido.",
-                    ephemeral=False,
+                    ephemeral=True,
                 )
                 return
 
@@ -1092,7 +1172,7 @@ async def expense_user(
             if amount not in valid_amount:
                 await interaction.followup.send(
                     f"**Error:** `{amount}` no es una cantidad válida.",
-                    ephemeral=False,
+                    ephemeral=True,
                 )
                 return
 
@@ -1103,11 +1183,11 @@ async def expense_user(
 
         report = "\n".join(lines)
 
-        await interaction.followup.send(report, ephemeral=False)
+        await interaction.followup.send(report, ephemeral=True)
 
     except GameNotFoundException:
         await interaction.followup.send(
-            "**Error:** No hay ninguna partida activa en este canal.", ephemeral=False
+            "**Error:** No hay ninguna partida activa en este canal.", ephemeral=True
         )
     except TooManyExpenses:
         report = [f"Orden `{cmd}` enviada."]
@@ -1115,9 +1195,9 @@ async def expense_user(
         report.append("**Órdenes recibidas hasta ahora:**")
         for c in player.commands:
             report.append(f"`{c}`")
-        await interaction.followup.send("\n".join(report), ephemeral=False)
+        await interaction.followup.send("\n".join(report), ephemeral=True)
     except Exception as e:
         error_detallado = format_error_with_location(e)
         await interaction.followup.send(
-            f"**Error inesperado:** {error_detallado}", ephemeral=False
+            f"**Error inesperado:** {error_detallado}", ephemeral=True
         )
