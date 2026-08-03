@@ -1,9 +1,10 @@
-# tests/machiavelli/engine/test_core.py
+"""Pruebas de coordinación y barreras de error del motor de turnos."""
 
 import unittest
 from unittest.mock import Mock, call, patch
 
 from machiavelli.engine.core import GameEngine
+from machiavelli.engine.military import MilitaryResolutionError
 
 
 class TestGameEngineRunCampaign(unittest.TestCase):
@@ -141,7 +142,7 @@ class TestGameEngineRunCampaign(unittest.TestCase):
             call.rebellion_expenses(),
             call.bribe_run(),
             call.assassination_run(),
-            call.military_run(),
+            call.military_run(dislodgement_resolver=None),
             call.attrition(),
             call.control_run(),
             call.clear_famine(),
@@ -208,3 +209,114 @@ class TestGameEngineRun(unittest.TestCase):
                     mock_campaign.assert_called_once()
                     mock_startup.assert_not_called()
                     mock_maintenance.assert_not_called()
+
+
+class TestGameEngineDislodgementBarrier(unittest.TestCase):
+    """Verifica la inyección de retiradas y la parada tras un fallo militar."""
+    @patch("machiavelli.engine.core.ControlManager")
+    @patch("machiavelli.engine.core.MilitaryResolver")
+    @patch("machiavelli.engine.core.AssassinationResolver")
+    @patch("machiavelli.engine.core.BribeResolver")
+    @patch("machiavelli.engine.core.RebellionManager")
+    @patch("machiavelli.engine.core.DisastersManager")
+    @patch("machiavelli.engine.core.ExpenditureProcessor")
+    def test_manager_is_forwarded_and_control_observes_consolidated_state(
+        self,
+        mock_expenditure_cls,
+        mock_disasters_cls,
+        mock_rebellion_cls,
+        mock_bribe_cls,
+        mock_assassination_cls,
+        mock_military_cls,
+        mock_control_cls,
+    ):
+        game = Mock()
+        game.turn_number = 2
+        player = Mock()
+        player.armies = ["before"]
+        game.players = [player]
+        dislodgement_resolver = Mock(name="dislodgement_resolver")
+        observed_by_control = []
+
+        def finish_military(*, dislodgement_resolver):
+            """Simula el commit militar antes de que se ejecute control."""
+            self.assertIs(dislodgement_resolver, dislodgement_resolver_mock)
+            player.armies = ["resolved"]
+
+        def capture_control():
+            """Captura el estado que recibe la fase posterior al resolver militar."""
+            observed_by_control.append(tuple(player.armies))
+
+        dislodgement_resolver_mock = dislodgement_resolver
+        mock_military_cls.return_value.run.side_effect = finish_military
+        mock_control_cls.return_value.run.side_effect = capture_control
+        order = Mock()
+        order.attach_mock(mock_military_cls.return_value.run, "military")
+        order.attach_mock(
+            mock_disasters_cls.return_value.resolve_famine_attrition,
+            "attrition",
+        )
+        order.attach_mock(mock_control_cls.return_value.run, "control")
+        order.attach_mock(mock_disasters_cls.return_value.clear_famine, "clear")
+        order.attach_mock(mock_disasters_cls.return_value.spawn_plague, "plague")
+
+        engine = GameEngine(
+            game,
+            dislodgement_resolver=dislodgement_resolver,
+        )
+        self.assertIs(engine.dislodgement_resolver, dislodgement_resolver)
+        engine.run_campaign()
+
+        mock_military_cls.return_value.run.assert_called_once_with(
+            dislodgement_resolver=dislodgement_resolver
+        )
+        self.assertEqual(observed_by_control, [("resolved",)])
+        self.assertEqual(
+            order.mock_calls,
+            [
+                call.military(dislodgement_resolver=dislodgement_resolver),
+                call.attrition(),
+                call.control(),
+                call.clear(),
+                call.plague(),
+            ],
+        )
+
+    @patch("machiavelli.engine.core.ControlManager")
+    @patch("machiavelli.engine.core.MilitaryResolver")
+    @patch("machiavelli.engine.core.AssassinationResolver")
+    @patch("machiavelli.engine.core.BribeResolver")
+    @patch("machiavelli.engine.core.RebellionManager")
+    @patch("machiavelli.engine.core.DisastersManager")
+    @patch("machiavelli.engine.core.ExpenditureProcessor")
+    def test_military_error_stops_all_later_campaign_phases(
+        self,
+        mock_expenditure_cls,
+        mock_disasters_cls,
+        mock_rebellion_cls,
+        mock_bribe_cls,
+        mock_assassination_cls,
+        mock_military_cls,
+        mock_control_cls,
+    ):
+        game = Mock()
+        game.turn_number = 2
+        dislodgement_resolver = Mock(name="dislodgement_resolver")
+        error = MilitaryResolutionError("stop")
+        mock_military_cls.return_value.run.side_effect = error
+        engine = GameEngine(
+            game,
+            dislodgement_resolver=dislodgement_resolver,
+        )
+
+        with self.assertRaises(MilitaryResolutionError) as caught:
+            engine.run_campaign()
+
+        self.assertIs(caught.exception, error)
+        mock_military_cls.return_value.run.assert_called_once_with(
+            dislodgement_resolver=dislodgement_resolver
+        )
+        mock_disasters_cls.return_value.resolve_famine_attrition.assert_not_called()
+        mock_control_cls.return_value.run.assert_not_called()
+        mock_disasters_cls.return_value.clear_famine.assert_not_called()
+        mock_disasters_cls.return_value.spawn_plague.assert_not_called()
