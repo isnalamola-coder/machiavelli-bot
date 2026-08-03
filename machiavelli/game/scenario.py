@@ -1,10 +1,10 @@
-# machiavelli/scenario.py
+# machiavelli/game/scenario.py
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
-from machiavelli.tables import GameTables
+from machiavelli.game.tables import GameTables
 
 
 @dataclass
@@ -21,7 +21,7 @@ class Power:
         extra_provinces (list[str]): IDs de provincias adicionales controladas.
     """
 
-    name: str = field(init=False)
+    name: str = field(default="", init=False)
     home_countries: list[str] = field(default_factory=list)
     controlled_provinces: list[str] = field(default_factory=list)
     armies: list[str] = field(default_factory=list)
@@ -72,7 +72,7 @@ class Scenario:
     def __post_init__(self):
         """Asigna los territorios iniciales a las potencias del escenario."""
         for p_id, power in self.powers.items():
-            power.name = GameTables.powers[p_id]
+            power.name = GameTables.powers.get(p_id, p_id.capitalize())
             power.controlled_provinces = []
 
             # Asignar provincias de sus países natales
@@ -84,13 +84,16 @@ class Scenario:
             # Asignar provincias adicionales si las hay
             provinces.extend(power.extra_provinces)
 
-            # Elimina duplicados y asígnalo
+            # Elimina duplicados manteniendo el orden
             power.controlled_provinces = list(dict.fromkeys(provinces))
 
     @classmethod
-    def load_scenarios(cls) -> dict[str, Self]:
+    def load_scenarios(cls, json_path: Path | str | None = None) -> dict[str, Self]:
         """Lee el JSON de escenarios y los devuelve en un diccionario."""
-        json_path = Path(__file__).parent / "scenarios.json"
+        if json_path is None:
+            json_path = Path(__file__).parent / "scenarios.json"
+        else:
+            json_path = Path(json_path)
 
         with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -137,12 +140,24 @@ class Scenario:
     def province_home_country(self, province: str) -> str | None:
         """Devuelve el ID del país natal al que pertenece una provincia.
 
+        Soporta consulta por ID base ("prove") o por costa ("prove S").
+
         Args:
-            province (str): ID de la provincia.
+            province (str): ID de la provincia o costa.
         Returns:
             str | None: ID del país natal (ej. "M"), o `None` si no pertenece a ninguno.
         """
+        base_province = province.split()[0]
         for hc_id, hc in self.home_countries.items():
-            if province in hc.provinces:
+            if base_province in hc.provinces:
                 return hc_id
         return None
+
+    def home_countries_provinces(self, home_countries: list[str]) -> list[str] | None:
+        """Devuelve los ID de las provincias que pertenecen a los home countries."""
+        provinces = []
+        for hc in home_countries:
+            if hc in self.home_countries:
+                provinces.extend(self.home_countries[hc].provinces)
+
+        return provinces

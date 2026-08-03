@@ -1,9 +1,8 @@
-# machiavelli/map.py
+# machiavelli/game/map.py
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Self
 
 
 class MovementMode(StrEnum):
@@ -37,33 +36,10 @@ class Location:
     """
 
     name: str
+    custom_id: str | None = None
     id: str = field(init=False)
     land_routes: list[Route] = field(default_factory=list)
     sea_routes: list[Route] = field(default_factory=list)
-
-    def exclude_routes(self, exclude_ids: list) -> Self:
-        """Elimina las rutas que tienen como destino las locationns en exclude_ids.
-
-        Elimina rutas que llevan a las provincias dadas. Para tratar las localizaciones
-        que tienen varias posiciones (como Provence, que tiene costa sur y norte)
-        identifica la provincia o mar eliminando el calificador de costa. Por ejemplo,
-        eliminar 'prove' elimina tanto las rutas que llevan a 'prove' como las que
-        llevan a 'prove S' y 'prove N'.
-
-        Args:
-            exclude_ids (List): IDs de destinos para los que deben purgarse las rutas.
-
-        Returns:
-            Self: la propia instancia para permitir encadenamiento de métodos.
-        """
-        self.land_routes = [
-            r for r in self.land_routes if r.destination.split()[0] not in exclude_ids
-        ]
-        self.sea_routes = [
-            r for r in self.sea_routes if r.destination.split()[0] not in exclude_ids
-        ]
-
-        return self
 
 
 @dataclass
@@ -79,7 +55,6 @@ class Province(Location):
     has_port: bool = False
     major_city: int | None = None
     is_venice: bool = False
-    custom_id: str | None = None
 
     def __post_init__(self):
         """Genera el ID automático a partir del nombre tras la inicialización."""
@@ -100,7 +75,20 @@ class Sea(Location):
 
     def __post_init__(self):
         """Genera el ID automático a partir del nombre tras la inicialización."""
-        self.id = "".join([word[0] for word in self.name.split()]).upper()
+        self.id = (
+            self.custom_id
+            if self.custom_id
+            else "".join([word[0] for word in self.name.split()]).upper()
+        )
+
+
+def _parse_routes(routes_raw: list[dict], exclude_set: set[str]) -> list[Route]:
+    """Helper interno para instanciar solo rutas hacia destinos no excluidos."""
+    return [
+        Route(destination=r["destination"], strait=r.get("strait"))
+        for r in routes_raw
+        if r["destination"].split()[0] not in exclude_set
+    ]
 
 
 @dataclass
@@ -116,18 +104,22 @@ class Map:
     seas: dict[str, Sea] = field(default_factory=dict)
 
     @classmethod
-    def load_map(cls, exclude_ids: list[str] = None) -> "Map":
+    def load_map(
+        cls, exclude_ids: list[str] | None = None, json_path: Path | str | None = None
+    ) -> "Map":
         """Carga el JSON maestro, purga las exclusiones y clasifica tierra y mar."""
-        if exclude_ids is None:
-            exclude_ids = []
+        exclude_set = set(exclude_ids) if exclude_ids else set()
 
-        json_path = Path(__file__).parent / "map_data.json"
+        if json_path is None:
+            json_path = Path(__file__).parent / "map_data.json"
+        else:
+            json_path = Path(json_path)
 
         with open(json_path, encoding="utf-8") as f:
             raw_data = json.load(f)
 
-        processed_provinces = {}
-        processed_seas = {}
+        processed_provinces: dict[str, Province] = {}
+        processed_seas: dict[str, Sea] = {}
 
         # Procesamos las provincias
         for item in raw_data.get("provinces", []):
@@ -139,75 +131,25 @@ class Map:
                 is_venice=item.get("is_venice", False),
                 custom_id=item.get("custom_id"),
             )
-            if province.id.split()[0] in exclude_ids:
+            if province.id.split()[0] in exclude_set:
                 continue
-            for r_data in item.get("land_routes", []):
-                if r_data["destination"].split()[0] in exclude_ids:
-                    continue
-                route = Route(
-                    destination=r_data["destination"], strait=r_data.get("strait")
-                )
-                province.land_routes.append(route)
-            for r_data in item.get("sea_routes", []):
-                if r_data["destination"].split()[0] in exclude_ids:
-                    continue
-                route = Route(
-                    destination=r_data["destination"], strait=r_data.get("strait")
-                )
-                province.sea_routes.append(route)
+
+            province.land_routes = _parse_routes(
+                item.get("land_routes", []), exclude_set
+            )
+            province.sea_routes = _parse_routes(item.get("sea_routes", []), exclude_set)
             processed_provinces[province.id] = province
 
-        # Procesamos los mares
         for item in raw_data.get("seas", []):
-            sea = Sea(name=item["name"])
-            if sea.id in exclude_ids:
+            sea = Sea(name=item["name"], custom_id=item.get("custom_id"))
+            if sea.id in exclude_set:
                 continue
-            for r_data in item.get("land_routes", []):
-                if r_data["destination"].split()[0] in exclude_ids:
-                    continue
-                route = Route(
-                    destination=r_data["destination"], strait=r_data.get("strait")
-                )
-                sea.land_routes.append(route)
-            for r_data in item.get("sea_routes", []):
-                if r_data["destination"].split()[0] in exclude_ids:
-                    continue
-                route = Route(
-                    destination=r_data["destination"], strait=r_data.get("strait")
-                )
-                sea.sea_routes.append(route)
+
+            sea.land_routes = _parse_routes(item.get("land_routes", []), exclude_set)
+            sea.sea_routes = _parse_routes(item.get("sea_routes", []), exclude_set)
             processed_seas[sea.id] = sea
 
         return cls(provinces=processed_provinces, seas=processed_seas)
-
-    def exclude_locations(self, exclude_ids: list) -> Self:
-        """Elimina provincias o mares del mapa.
-
-        Elimina provincias o mares del mapa, así como las rutas que llevan a ellos,
-        eliminándolos efectivamente del mapa. Para tratar las localizaciones que tienen
-        varias costas (por ejemplo, Provence, que tiene costa sur y norte) identifica
-        la provincia o mar eliminando el calificador de costa. Por ejemplo, eliminar
-        'prove' elimina tanto 'prove' como 'prove S' y 'prove N', así como las rutas que
-        llevan a ellas.
-
-        Args:
-            exclude_ids (list): Lista de IDs de las provincias y mares a eliminar.
-
-        Returns:
-            Self: la propia instancia para permitir encadenamiento de métodos.
-        """
-        self.provinces = {
-            k: v.exclude_routes(exclude_ids)
-            for k, v in self.provinces.items()
-            if k.split()[0] not in exclude_ids
-        }
-        self.seas = {
-            k: v.exclude_routes(exclude_ids)
-            for k, v in self.seas.items()
-            if k.split()[0] not in exclude_ids
-        }
-
-        return self
 
     def adjacent_locations(
         self, origin: str, mode: MovementMode = MovementMode.BOTH
@@ -242,6 +184,7 @@ class Map:
         """
         locations = self.provinces | self.seas
         adjacent = set()
+        origin_base = origin.split()[0]
 
         if mode in (MovementMode.LAND, MovementMode.BOTH):
             adjacent |= {r.destination for r in locations[origin].land_routes}
@@ -254,7 +197,7 @@ class Map:
                 r.destination
                 for lo in locations.keys()
                 for r in locations[lo].sea_routes
-                if lo.split()[0] == origin
+                if lo.split()[0] == origin_base
             }
             # Los destinos a cualquiera de las dos costas llevan también a la provincia
             adjacent |= {dest.split()[0] for dest in adjacent}

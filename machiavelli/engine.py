@@ -2,8 +2,8 @@
 from collections import defaultdict
 from random import Random
 
+from ..game.game import Command, Game, Player
 from .events import EventType, TurnEvent
-from .game import Command, Game, Player
 from .tables import GameTables
 
 
@@ -366,7 +366,7 @@ class GameEngine:
 
         self.game.add_event(
             TurnEvent(
-                type=EventType.SEASON_START, data={"year": year, "season": season}
+                type=EventType.START_SEASON, data={"year": year, "season": season}
             )
         )
 

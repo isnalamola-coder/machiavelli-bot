@@ -6,6 +6,45 @@ from unittest.mock import Mock, call, patch
 from machiavelli.engine.core import GameEngine
 
 
+class TestGameEngineRunStartup(unittest.TestCase):
+    def setUp(self):
+        self.mock_game = Mock()
+        self.engine = GameEngine(game=self.mock_game)
+
+    @patch("machiavelli.engine.core.SetupManager")
+    def test_run_startup(self, mock_setup_manager_cls):
+        """Ejecuta correctamente el setup cuando estamos en el turno 0."""
+        self.mock_game.turn_number = 0
+        mock_setup_manager_instance = mock_setup_manager_cls.return_value
+
+        self.engine.run_startup()
+
+        # Verifica que se instancia el SetupManager pasándole el game y el rng del motor
+        mock_setup_manager_cls.assert_called_once_with(self.mock_game, self.engine.rng)
+        # Verifica que se llama al método run() del manager
+        mock_setup_manager_instance.run.assert_called_once()
+
+    @patch("machiavelli.engine.core.SetupManager")
+    def test_run_startup_exception(self, mock_setup_manager_cls):
+        """Captura las excepciones y las reencadena como TurnExecutionFailed."""
+        from machiavelli.engine.exceptions import (
+            DuplicatePlayerError,
+            TurnExecutionFailed,
+        )
+
+        self.mock_game.turn_number = 0
+
+        # Simulamos que el SetupManager lanza un error de setup conocido
+        error_raised = DuplicatePlayerError(player_id="p1", discord_id=None)
+        mock_setup_manager_cls.return_value.run.side_effect = error_raised
+
+        with self.assertRaises(TurnExecutionFailed) as ctx:
+            self.engine.run_startup()
+
+        # Comprobamos que el encadenamiento de excepciones (__cause__) se conserva
+        self.assertIs(ctx.exception.__cause__, error_raised)
+
+
 class TestGameEngineRunCampaign(unittest.TestCase):
     def setUp(self):
         self.mock_game = Mock()
