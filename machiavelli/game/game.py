@@ -9,37 +9,10 @@ from datetime import datetime, timedelta
 from typing import Self
 
 from machiavelli.events import TurnEvent
-from machiavelli.map import Map, MovementMode, Province, Sea
-from machiavelli.scenario import Power, Scenario
-from machiavelli.tables import GameTables
 
-
-class FailedToStartError(Exception):
-    """Excepción lanzada cuando se intenta arrancar una partida sin tener todos los prerrequisitos."""
-
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
-
-
-class DuplicatedGameException(Exception):
-    """Excepción lanzada cuando se intenta crear una partida con un nombre o canal que ya están registrados."""
-
-    pass
-
-
-class GameNotFoundException(Exception):
-    """Lanzada cuando se busca una partida en la BBDD y no existe."""
-
-    pass
-
-
-class TooManyExpenses(Exception):
-    """Lanzada cuando superamos el máximo de gastos que se pueden realizar en un turno."""
-
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
+from .map import Map, MovementMode, Province, Sea
+from .scenario import Power, Scenario
+from .tables import GameTables
 
 
 @dataclass
@@ -1679,14 +1652,13 @@ class Game:
         # Cargamos el escenario
         if game.scenario_id:
             game.scenario = Scenario.load_scenarios().get(game.scenario_id)
+            excluded_locations = game.scenario.excluded_locations
         else:
             game.scenario = None
+            excluded_locations = None
 
         # Cargamos el mapa
-        game.map = Map.load_map()
-
-        if game.scenario_id:
-            game.map.exclude_locations(game.scenario.excluded_locations)
+        game.map = Map.load_map(exclude_ids=excluded_locations)
 
         # Resultado
         return game

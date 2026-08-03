@@ -5,9 +5,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from ..events import EventType, TurnEvent
-from ..game import Command, Game, Player
-from ..map import MovementMode
-from ..tables import GameTables
+from ..game.game import Command, Game, Player
+from ..game.map import MovementMode
+from ..game.tables import GameTables
 
 logger = logging.getLogger(__name__)
 

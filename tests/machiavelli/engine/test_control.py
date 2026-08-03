@@ -464,5 +464,5 @@ class TestControlManagerRun(unittest.TestCase):
             self.manager.run()
 
             event = self.mock_game.add_event.call_args[0][0]
-            self.assertEqual(event.type, EventType.SEASON_START)
+            self.assertEqual(event.type, EventType.START_SEASON)
             self.assertEqual(event.data, {"year": 1454, "season": 0})

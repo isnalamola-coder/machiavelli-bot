@@ -5,7 +5,7 @@ from collections import defaultdict
 from unittest.mock import Mock, patch
 
 from machiavelli.engine.bribes import Bribe, BribeResolver
-from machiavelli.map import MovementMode
+from machiavelli.game.map import MovementMode
 from tests.machiavelli.engine.helpers import create_mock_game, create_mock_player
 
 
