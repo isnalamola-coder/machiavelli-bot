@@ -1,22 +1,39 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "machiavelli"
-version = "0.4.2"
-description = "Motor del juego Machiavelli"
+version = "0.5.0.dev0"
+description = "Motor y bot de Discord para el juego Machiavelli"
+readme = "README.md"
 requires-python = ">=3.13"
+dependencies = [
+    "discord.py>=2.3.2",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "mypy>=1.10",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.9",
+]
+
+[tool.setuptools.packages.find]
+include = ["machiavelli*"]
+exclude = ["tests*", "specs*"]
+
+[tool.setuptools.package-data]
+machiavelli = ["*.json"]
 
 [tool.ruff]
-# Longitud máxima de línea (por defecto 88, igual que Black)
 line-length = 88
 target-version = "py313"
 
 [tool.ruff.lint]
-# Selección de reglas a aplicar:
-# E/W = pycodestyle, F = Pyflakes, I = isort (reordenar imports),
-# UP = pyupgrade (sintaxis moderna), B = flake8-bugbear (errores comunes)
 select = ["E", "W", "F", "I", "UP", "B"]
-
-# Reglas específicas a ignorar si alguna te molesta
 ignore = []
-
-# Permitir autofix para todas las reglas activas
 fixable = ["ALL"]
