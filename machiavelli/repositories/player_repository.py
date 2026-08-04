@@ -85,6 +85,63 @@ class PlayerRepository:
         self.command_repo._delete_by_player(player)
         self.command_repo._save_many(player.commands)
 
+    def _replace_for_game(self, game: Game) -> None:
+        """Synchronize the complete persisted player collection for one game."""
+        if game.database_id is None:
+            raise ValueError("No se puede persistir una partida sin ID")
+
+        player_ids: list[str] = []
+        seen_player_ids: set[str] = set()
+        discord_ids: set[int] = set()
+        for player in game.players:
+            if player.game is not game:
+                raise ValueError("Todos los jugadores deben pertenecer a la partida")
+            if player.player_id in seen_player_ids:
+                raise ValueError(
+                    f"Identificador de jugador duplicado: {player.player_id}"
+                )
+            if player.discord_id is not None and player.discord_id in discord_ids:
+                raise ValueError(f"Cuenta de Discord duplicada: {player.discord_id}")
+            player_ids.append(player.player_id)
+            seen_player_ids.add(player.player_id)
+            if player.discord_id is not None:
+                discord_ids.add(player.discord_id)
+
+        if player_ids:
+            placeholders = ", ".join("?" for _ in player_ids)
+            parameters = (game.database_id, *player_ids)
+            self.conn.execute(
+                f"DELETE FROM commands WHERE game_id = ? "
+                f"AND player_id NOT IN ({placeholders})",
+                parameters,
+            )
+            self.conn.execute(
+                f"DELETE FROM players WHERE game_id = ? "
+                f"AND player_id NOT IN ({placeholders})",
+                parameters,
+            )
+        else:
+            self.conn.execute(
+                "DELETE FROM commands WHERE game_id = ?",
+                (game.database_id,),
+            )
+            self.conn.execute(
+                "DELETE FROM players WHERE game_id = ?",
+                (game.database_id,),
+            )
+
+        for player in game.players:
+            self._upsert(player)
+            self._replace_commands(player)
+
+    def replace_for_game(self, game: Game) -> None:
+        """Persist the authoritative player collection without partial commits."""
+        if self.conn.in_transaction:
+            self._replace_for_game(game)
+            return
+        with self.conn:
+            self._replace_for_game(game)
+
     def save(self, player: Player) -> None:
         """Upsert a player and commands without committing an outer transaction."""
         if self.conn.in_transaction:

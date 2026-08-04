@@ -80,3 +80,26 @@ def test_save_rolls_back_complete_new_game_on_player_command_error(
     assert connection.execute("SELECT COUNT(*) FROM games").fetchone()[0] == 0
     assert connection.execute("SELECT COUNT(*) FROM players").fetchone()[0] == 0
     assert connection.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == 0
+
+
+def test_save_rolls_back_game_players_commands_and_events_together(
+    connection: sqlite3.Connection,
+) -> None:
+    """An event persistence error must roll back the complete aggregate."""
+    repo = GameRepository(connection)
+    game = Game(
+        name="Evento inválido",
+        channel_id=556,
+        turn_events=[None],  # type: ignore[list-item]
+    )
+    player = Player(game, "P1")
+    player.commands = [Command(game, player, "A rome", "H", None)]
+    game.players = [player]
+
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.save(game)
+
+    assert game.database_id is None
+    for table in ("games", "players", "commands", "game_events"):
+        count = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        assert count == 0

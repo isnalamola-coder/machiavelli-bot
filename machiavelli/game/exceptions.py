@@ -17,8 +17,23 @@ class GameNotFoundException(Exception):
     """Raised when a requested game does not exist in persistence."""
 
 
+class GameRuleException(Exception):
+    """Base class for invalid aggregate operations requested by a caller."""
+
+
+class DuplicatePlayerException(GameRuleException):
+    """Raised when a player identifier or Discord account is already registered."""
+
+
+class PlayerNotFoundException(GameRuleException):
+    """Raised when a requested player does not belong to a game."""
+
+
 __all__ = [
+    "DuplicatePlayerException",
     "DuplicatedGameException",
     "FailedToStartError",
     "GameNotFoundException",
+    "GameRuleException",
+    "PlayerNotFoundException",
 ]

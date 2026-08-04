@@ -50,7 +50,8 @@ class GameEngine:
             ) from e
 
     def run_maintenance(self) -> None:
-        pass
+        """Execute the established maintenance rules through the game domain."""
+        self.game.spring_maintenance()
 
     def run_campaign(self) -> None:
         """Ejecutamos el flujo completo de turno de campaña."""
@@ -116,3 +117,6 @@ class GameEngine:
             self.run_maintenance()
         else:
             self.run_campaign()
+
+        # Lifecycle progression is applied only after every phase completes.
+        self.game.advance_turn()

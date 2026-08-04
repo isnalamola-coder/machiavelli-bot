@@ -249,6 +249,31 @@ class TestGameEngineRun(unittest.TestCase):
                     mock_startup.assert_not_called()
                     mock_maintenance.assert_not_called()
 
+    def test_run_advances_lifecycle_only_after_success(self):
+        """No avanza ni limpia órdenes cuando la fase activa falla."""
+        self.mock_game.turn_number = 2
+
+        with patch.object(self.engine, "run_campaign"):
+            self.engine.run()
+        self.mock_game.advance_turn.assert_called_once_with()
+
+        self.mock_game.advance_turn.reset_mock()
+        with (
+            patch.object(
+                self.engine,
+                "run_campaign",
+                side_effect=RuntimeError("phase failed"),
+            ),
+            self.assertRaises(RuntimeError),
+        ):
+            self.engine.run()
+        self.mock_game.advance_turn.assert_not_called()
+
+    def test_run_maintenance_uses_the_game_domain_rules(self):
+        """La integración no duplica todavía el algoritmo de mantenimiento."""
+        self.engine.run_maintenance()
+        self.mock_game.spring_maintenance.assert_called_once_with()
+
 
 class TestGameEngineDislodgementBarrier(unittest.TestCase):
     """Verifica la inyección de retiradas y la parada tras un fallo militar."""
