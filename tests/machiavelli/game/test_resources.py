@@ -112,8 +112,14 @@ def test_resources_load_after_installing_wheel(tmp_path: Path) -> None:
             str(executable),
             "-c",
             (
+                "from pathlib import Path; "
+                "import machiavelli; "
+                "from machiavelli.engine import GameEngine; "
+                "from machiavelli.game import Command, Game, Player; "
                 "from machiavelli.game.map import Map; "
                 "from machiavelli.game.scenario import Scenario; "
+                "assert 'site-packages' in Path(machiavelli.__file__).parts; "
+                "assert GameEngine and Game and Player and Command; "
                 "assert Map.load_map().provinces; "
                 "assert Scenario.load_scenarios()"
             ),

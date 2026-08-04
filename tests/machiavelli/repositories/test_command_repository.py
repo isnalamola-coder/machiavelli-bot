@@ -1,6 +1,7 @@
 """Tests for canonical command persistence."""
 
 import sqlite3
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -42,6 +43,22 @@ def domain(db_conn: sqlite3.Connection) -> tuple[Game, Player, Player]:
 @pytest.fixture
 def repo(db_conn: sqlite3.Connection) -> CommandRepository:
     return CommandRepository(db_conn)
+
+
+def test_get_by_player_orders_query_by_command_id() -> None:
+    """Lock the persisted ordering contract to the existing command primary key."""
+    conn = MagicMock(spec=sqlite3.Connection)
+    cursor = MagicMock(spec=sqlite3.Cursor)
+    cursor.fetchall.return_value = []
+    conn.execute.return_value = cursor
+    game = Game(name="Partida Test", database_id=1)
+    player = Player(game, "p1")
+
+    assert CommandRepository(conn).get_by_player(player) == []
+
+    sql, parameters = conn.execute.call_args.args
+    assert "ORDER BY commands.id ASC" in " ".join(sql.split())
+    assert parameters == (1, "p1")
 
 
 def test_save_and_get_by_player(

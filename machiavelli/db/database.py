@@ -1,4 +1,4 @@
-# machiavelli/db/database.py
+"""Canonical SQLite schema, migration, and connection management."""
 
 import logging
 import sqlite3
@@ -64,78 +64,78 @@ _UPGRADES: tuple[str, ...] = (
         target TEXT,
         FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
         FOREIGN KEY (game_id, player_id)
-        REFERENCES players(game_id, player_id) ON DELETE CASCADE
+            REFERENCES players(game_id, player_id) ON DELETE CASCADE
     );
     """,
 )
 
 
-class DatabaseManager:
-    """Capa de Persistencia (Infraestructura).
+def upgrade_connection(conn: sqlite3.Connection) -> None:
+    """Apply pending migrations without taking ownership of the connection."""
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA user_version;")
+    row = cursor.fetchone()
+    current_version = int(row[0]) if row else 0
 
-    Gestiona la base de datos SQLite, migraciones de esquema y operaciones CRUD.
-    """
+    if current_version >= _SCHEMA_VERSION:
+        logger.info("Esquema de BBDD actualizado (versión %d).", current_version)
+        return
+
+    logger.warning(
+        "Actualizando esquema de BBDD de versión %d a %d.",
+        current_version,
+        _SCHEMA_VERSION,
+    )
+
+    target_version = current_version
+    try:
+        for version in range(current_version, _SCHEMA_VERSION):
+            target_version = version + 1
+            logger.info("Aplicando migración a versión %d...", target_version)
+            cursor.executescript(_UPGRADES[version])
+            cursor.execute(f"PRAGMA user_version = {target_version};")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.exception("Falló la actualización al esquema %d.", target_version)
+        raise
+
+    logger.info(
+        "Esquema de BBDD actualizado con éxito a la versión %d.",
+        _SCHEMA_VERSION,
+    )
+
+
+def upgrade(db_path: str | Path) -> None:
+    """Open a SQLite database, apply pending migrations, and always close it."""
+    conn = sqlite3.connect(db_path)
+    try:
+        upgrade_connection(conn)
+    finally:
+        conn.close()
+
+
+class DatabaseManager:
+    """Configure SQLite connections and initialize the canonical schema."""
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
 
     def get_connection(self) -> sqlite3.Connection:
-        """Abre una conexión a SQLite y aplica las configuraciones por sesión."""
+        """Open a connection and apply the required per-session configuration."""
         if not self.db_path.parent.exists():
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         conn = sqlite3.connect(self.db_path)
-
-        # Mapeo de columnas por nombre
         conn.row_factory = sqlite3.Row
-
-        # Pragmas obligatorios por sesión
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA journal_mode = WAL;")
-
         return conn
 
     def init_db(self) -> None:
-        """Comprueba el 'user_version' y lo actualiza si es necesario."""
+        """Initialize or upgrade the database through the canonical migration path."""
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA user_version;")
-            row = cursor.fetchone()
-            current_version = row[0] if row else 0
-
-            if current_version >= _SCHEMA_VERSION:
-                logger.info(
-                    "Esquema de BBDD actualizado (versión %d).", current_version
-                )
-                return
-
-            logger.warning(
-                "Actualizando esquema de BBDD de versión %d a %d.",
-                current_version,
-                _SCHEMA_VERSION,
-            )
-
-            for version in range(current_version, _SCHEMA_VERSION):
-                target_version = version + 1
-                logger.info("Aplicando migración a versión %d...", target_version)
-
-                try:
-                    # executescript gestiona sus propias transacciones DDL
-                    cursor.executescript(_UPGRADES[version])
-                    cursor.execute(f"PRAGMA user_version = {target_version};")
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                    logger.exception(
-                        "Falló la actualización al esquema %d.", target_version
-                    )
-                    raise
-
-            logger.info(
-                "Esquema de BBDD actualizado con éxito a la versión %d.",
-                _SCHEMA_VERSION,
-            )
-
+            upgrade_connection(conn)
         finally:
             conn.close()

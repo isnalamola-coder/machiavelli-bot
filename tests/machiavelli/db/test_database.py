@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from machiavelli.db.database import _SCHEMA_VERSION, DatabaseManager
+from machiavelli.db import database as database_module
+from machiavelli.db.database import (
+    _SCHEMA_VERSION,
+    _UPGRADES,
+    DatabaseManager,
+    upgrade,
+    upgrade_connection,
+)
 
 
 @pytest.fixture
@@ -182,3 +189,160 @@ def test_init_db_rolls_back_on_migration_failure(
     conn.close()
 
     assert version == 1
+
+
+def test_upgrade_connection_migrates_version_two(db_path: Path) -> None:
+    """Una base en versión 2 recibe únicamente la tabla de comandos."""
+    conn = sqlite3.connect(db_path)
+    try:
+        for script in _UPGRADES[:2]:
+            conn.executescript(script)
+        conn.execute("PRAGMA user_version = 2;")
+        conn.commit()
+
+        upgrade_connection(conn)
+
+        assert conn.execute("PRAGMA user_version;").fetchone()[0] == _SCHEMA_VERSION
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='commands';"
+        ).fetchone() == ("commands",)
+    finally:
+        conn.close()
+
+
+def test_upgrade_connection_does_not_close_caller_connection(db_path: Path) -> None:
+    """La función canónica no toma propiedad de la conexión recibida."""
+    conn = sqlite3.connect(db_path)
+    try:
+        upgrade_connection(conn)
+        assert conn.execute("SELECT 1;").fetchone() == (1,)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("source_version", [1, 2, 3])
+def test_upgrade_preserves_historical_rows(db_path: Path, source_version: int) -> None:
+    """Las migraciones conservan partidas, jugadores, eventos y órdenes existentes."""
+    conn = sqlite3.connect(db_path)
+    try:
+        for script in _UPGRADES[:source_version]:
+            conn.executescript(script)
+        conn.execute(f"PRAGMA user_version = {source_version};")
+        conn.execute(
+            "INSERT INTO games "
+            "(name, channel_id, scenario_id, turn_number, famine, "
+            "independent_garrisons) VALUES (?, ?, ?, ?, ?, ?)",
+            ("Histórica", 123, "Be", 7, '["milan"]', '["pisa"]'),
+        )
+        game_id = conn.execute(
+            "SELECT id FROM games WHERE name = ?", ("Histórica",)
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO players "
+            "(game_id, player_id, discord_id, controlled_locations, armies, "
+            "fleets, garrisons, ass_counters, ducats, rebelled_provinces, "
+            "rebelled_cities, home_countries, power) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                game_id,
+                "Florencia",
+                456,
+                '["florence"]',
+                '["florence"]',
+                "[]",
+                "[]",
+                "[]",
+                12,
+                "[]",
+                "[]",
+                '["Florencia"]',
+                "Florencia",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO game_events (game_id, message) VALUES (?, ?)",
+            (game_id, "Evento histórico"),
+        )
+        if source_version == 3:
+            conn.execute(
+                "INSERT INTO commands "
+                "(game_id, player_id, actor, command, target) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (game_id, "Florencia", "A florence", "H", None),
+            )
+        conn.commit()
+
+        upgrade_connection(conn)
+
+        assert conn.execute("PRAGMA user_version;").fetchone()[0] == _SCHEMA_VERSION
+        assert conn.execute(
+            "SELECT name, channel_id, turn_number FROM games WHERE id = ?",
+            (game_id,),
+        ).fetchone() == ("Histórica", 123, 7)
+        assert conn.execute(
+            "SELECT player_id, discord_id, ducats FROM players WHERE game_id = ?",
+            (game_id,),
+        ).fetchone() == ("Florencia", 456, 12)
+        assert conn.execute(
+            "SELECT message FROM game_events WHERE game_id = ?", (game_id,)
+        ).fetchone() == ("Evento histórico",)
+        if source_version == 3:
+            assert conn.execute(
+                "SELECT actor, command, target FROM commands WHERE game_id = ?",
+                (game_id,),
+            ).fetchone() == ("A florence", "H", None)
+    finally:
+        conn.close()
+
+
+def test_database_manager_and_upgrade_create_equivalent_schemas(
+    tmp_path: Path,
+) -> None:
+    """Las dos entradas públicas producen el mismo esquema y versión."""
+    upgrade_path = tmp_path / "upgrade.db"
+    manager_path = tmp_path / "manager.db"
+
+    upgrade(upgrade_path)
+    DatabaseManager(manager_path).init_db()
+
+    def schema_snapshot(path: Path) -> tuple[int, tuple[tuple[str, str | None], ...]]:
+        conn = sqlite3.connect(path)
+        try:
+            version = conn.execute("PRAGMA user_version;").fetchone()[0]
+            rows = conn.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type='table' AND name != 'sqlite_sequence' ORDER BY name;"
+            ).fetchall()
+            return version, tuple(rows)
+        finally:
+            conn.close()
+
+    assert schema_snapshot(upgrade_path) == schema_snapshot(manager_path)
+
+
+def test_database_manager_delegates_to_upgrade_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DatabaseManager no mantiene un segundo bucle de migración."""
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = FakeConnection()
+    manager = DatabaseManager("ignored.db")
+    calls: list[FakeConnection] = []
+    monkeypatch.setattr(manager, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        database_module,
+        "upgrade_connection",
+        lambda conn: calls.append(conn),
+    )
+
+    manager.init_db()
+
+    assert calls == [connection]
+    assert connection.closed

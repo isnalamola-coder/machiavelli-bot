@@ -1,9 +1,15 @@
-# machiavell/__init__.py
+"""Top-level package metadata for Machiavelli."""
 
 import logging
+from importlib.metadata import PackageNotFoundError, version
 
 logging.getLogger("machiavelli").addHandler(logging.NullHandler())
 
-VERSION = "0.5.2"
+try:
+    __version__ = version("machiavelli")
+except PackageNotFoundError:
+    __version__ = "0.5.0.dev0"
 
-__all__ = []
+VERSION = __version__
+
+__all__ = ["VERSION", "__version__"]
