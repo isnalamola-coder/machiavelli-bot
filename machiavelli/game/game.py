@@ -11,38 +11,15 @@ from typing import Self
 from machiavelli.events import TurnEvent
 
 from .command import Command
-from .map import Map, MovementMode, Province, Sea
+from .exceptions import (
+    DuplicatedGameException,
+    FailedToStartError,
+    GameNotFoundException,
+)
+from .map import Map, MovementMode, Sea
 from .player import Player
 from .scenario import Power, Scenario
 from .tables import GameTables
-
-
-class FailedToStartError(Exception):
-    """La partida no puede arrancar porque faltan prerrequisitos."""
-
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
-
-
-class DuplicatedGameException(Exception):
-    """El nombre o canal de la partida ya están registrados."""
-
-    pass
-
-
-class GameNotFoundException(Exception):
-    """Lanzada cuando se busca una partida en la BBDD y no existe."""
-
-    pass
-
-
-class TooManyExpenses(Exception):
-    """Se ha superado el máximo de gastos permitidos en un turno."""
-
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
 
 
 @dataclass
@@ -1166,121 +1143,6 @@ class _HistoricalPlayer:
 
         return choices
 
-    def cmd_add_command(self, command: Command) -> list[str]:
-        """Añade o modifica una orden del jugador"""
-        report = []
-
-        # Reportamos la orden recibida
-        report.append(f"Orden `{command}` enviada.")
-
-        if self.game.turn_number % 4 == 1:
-            # Primer turno de la primavera, mantenimiento
-            # Busco si ya existe un comando para el mismo actor
-            current_cmd = [c for c in self.commands if c.actor == command.actor]
-            if current_cmd:
-                ### Si lo hay, sustituyo el comando
-                assert len(current_cmd) == 1
-                report.append(f"Sustituye la orden anterior `{current_cmd[0]}`.")
-                current_cmd[0].command = command.command
-                current_cmd[0].target = command.target
-
-                # Si es una unidad recién creada y elijo "D" como orden, borra la orden
-                actor_type, actor_id = command.actor.split()
-
-                if (
-                    (actor_type == "A" and actor_id not in self.armies)
-                    or (actor_type == "F" and actor_id not in self.fleets)
-                    or (actor_type == "G" and actor_id not in self.garrisons)
-                ) and (command.command == "D"):
-                    self.commands.remove(current_cmd[0])
-            else:
-                if command.command != "D":
-                    ### Nuevo actor, añado el comando
-                    self.commands.append(command)
-        else:
-            # Campaña
-            actor_type, actor_id = command.actor.split()
-
-            if actor_type == "E":
-                # Buscamos si el gasto ya estaba registrado
-                expense = next(
-                    (
-                        c
-                        for c in self.commands
-                        if c.actor == command.actor and c.target == command.target
-                    ),
-                    None,
-                )
-
-                if expense:
-                    if int(command.command) == 0:
-                        self.commands.remove(expense)
-                    else:
-                        expense.command = command.command
-                else:
-                    expense_count = sum(
-                        command.actor.startswith("E ") for command in self.commands
-                    )
-                    if expense_count >= 4:
-                        raise TooManyExpenses(
-                            message="Solo se permiten hasta cuatro gastos por campaña"
-                        )
-                    else:
-                        self.commands.append(command)
-            else:
-                # Buscamos si el actor ya estaba registrado
-                cmds = [c for c in self.commands if c.actor == command.actor]
-
-                if cmds:
-                    # Y ahora comprobamos si hay convoy
-                    is_convoy = False
-                    locations = self.game.map.provinces | self.game.map.seas
-
-                    if actor_type == "A" and command.command == "A":
-                        fleets = [f for p in self.game.players for f in p.fleets]
-                        convoy = [
-                            c.target
-                            for c in self.commands
-                            if c.actor == command.actor and c.command == "A"
-                        ]
-                        if len(convoy) == len(cmds):
-                            for c in convoy:
-                                if c not in fleets:
-                                    break
-                            else:
-                                # Validamos el último destino del convoy.
-                                last_place = convoy[-1]
-                                destination = locations[command.target]
-                                if (
-                                    last_place in fleets
-                                    and command.target
-                                    in self.game.map.adjacent_locations(
-                                        last_place, MovementMode.BOTH
-                                    )
-                                    and (
-                                        command.target in fleets
-                                        or isinstance(destination, Province)
-                                    )
-                                ):
-                                    is_convoy = True
-                    # Un convoy se añade; cualquier otra orden sustituye la previa.
-                    if is_convoy:
-                        self.commands.append(command)
-                    else:
-                        # Borramos los anteriores
-                        self.commands = [c for c in self.commands if c not in cmds]
-                        self.commands.append(command)
-                else:
-                    # Nueva orden, solo la registramos
-                    self.commands.append(command)
-
-        # Reportamos las órdenes hasta ahora
-        report.append("**Órdenes recibidas hasta ahora:**")
-        for c in self.commands:
-            report.append(f"`{c}`")
-
-        return report
-
     @classmethod
     def load_players(cls, conn: sqlite3.Connection, game: Game) -> list[Self]:
         """Busca y devuelve todos los jugadores asociados a un id de partida.
@@ -2206,6 +2068,15 @@ class Game:
         raise ValueError(f"No existe ninguna unidad '{unit_id}' en el juego.")
 
 
+def __getattr__(name: str) -> object:
+    """Resolve temporary compatibility exports without creating import cycles."""
+    if name == "TooManyExpenses":
+        from machiavelli.engine.exceptions import TooManyExpenses
+
+        return TooManyExpenses
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "Command",
     "DuplicatedGameException",
@@ -2213,7 +2084,6 @@ __all__ = [
     "Game",
     "GameNotFoundException",
     "Player",
-    "TooManyExpenses",
 ]
 
 # The historical in-file implementations are deliberately removed from the

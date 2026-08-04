@@ -1,4 +1,4 @@
-# tests/machiavelli/engine/test_orders.py
+"""Contract tests for centralized order processing."""
 
 from __future__ import annotations
 
@@ -6,114 +6,323 @@ import pytest
 
 from machiavelli.engine.exceptions import TooManyExpenses
 from machiavelli.engine.orders import OrderProcessor
+from machiavelli.game import (
+    DuplicatedGameException,
+    FailedToStartError,
+    GameNotFoundException,
+)
 from machiavelli.game.command import Command
-from machiavelli.game.player import TurnType
-from tests.machiavelli.engine.helpers import create_mock_game, create_mock_player
+from machiavelli.game.exceptions import (
+    DuplicatedGameException as DomainDuplicatedGameException,
+)
+from machiavelli.game.exceptions import FailedToStartError as DomainFailedToStartError
+from machiavelli.game.exceptions import (
+    GameNotFoundException as DomainGameNotFoundException,
+)
+from machiavelli.game.game import (
+    DuplicatedGameException as CompatibilityDuplicatedGameException,
+)
+from machiavelli.game.game import FailedToStartError as CompatibilityFailedToStartError
+from machiavelli.game.game import Game
+from machiavelli.game.game import (
+    GameNotFoundException as CompatibilityGameNotFoundException,
+)
+from machiavelli.game.game import TooManyExpenses as CompatibilityTooManyExpenses
+from machiavelli.game.map import Map, Province, Route, Sea
+from machiavelli.game.player import Player, TurnType
+
+
+def make_command(
+    game: Game,
+    player: Player,
+    actor: str,
+    command: str,
+    target: str | None = None,
+) -> Command:
+    """Build a command using the canonical domain relationships."""
+    return Command(
+        game=game,
+        player=player,
+        actor=actor,
+        command=command,
+        target=target,
+    )
 
 
 @pytest.fixture
-def pyt_game():
-    return create_mock_game()
+def game() -> Game:
+    origin = Province("Origin", custom_id="origin", has_port=True)
+    destination = Province("Destination", custom_id="destination", has_port=True)
+    fort = Province("Fort", custom_id="fort", city="Fort")
+    sea_one = Sea("Sea One", custom_id="sea-one")
+    sea_two = Sea("Sea Two", custom_id="sea-two")
+
+    sea_one.sea_routes = [Route("sea-two"), Route("destination")]
+    sea_two.sea_routes = [Route("destination")]
+
+    return Game(
+        name="orders-test",
+        map=Map(
+            provinces={
+                origin.id: origin,
+                destination.id: destination,
+                fort.id: fort,
+            },
+            seas={sea_one.id: sea_one, sea_two.id: sea_two},
+        ),
+    )
 
 
 @pytest.fixture
-def pyt_player():
-    player = create_mock_player(
+def player(game: Game) -> Player:
+    current = Player(
+        game=game,
         player_id="player_1",
-        armies=["paler"],
-        fleets=["messi"],
-        garrisons=["naple"],
+        armies=["origin"],
+        fleets=["sea-one", "sea-two"],
+        garrisons=["fort"],
     )
-    # Inicializamos las colecciones y métodos que espera OrderProcessor
-    player.commands = []
-    player.remove_command = lambda cmd: (
-        player.commands.remove(cmd) if cmd in player.commands else None
-    )
-    player.add_command = lambda cmd: player.commands.append(cmd)
-    return player
+    game.players = [current]
+    return current
 
 
 @pytest.fixture
-def pyt_processor(pyt_game):
-    return OrderProcessor(pyt_game)
+def processor(game: Game) -> OrderProcessor:
+    return OrderProcessor(game)
+
+
+def test_game_exceptions_and_expense_exception_have_single_identities() -> None:
+    assert FailedToStartError is DomainFailedToStartError
+    assert FailedToStartError is CompatibilityFailedToStartError
+    assert DuplicatedGameException is DomainDuplicatedGameException
+    assert DuplicatedGameException is CompatibilityDuplicatedGameException
+    assert GameNotFoundException is DomainGameNotFoundException
+    assert GameNotFoundException is CompatibilityGameNotFoundException
+    assert TooManyExpenses is CompatibilityTooManyExpenses
 
 
 class TestMaintenanceTurn:
-    def test_add_new_command(self, pyt_processor, pyt_player):
-        cmd = Command(actor="A A1", command="M", target="Madrid")
-        report = pyt_processor.process_command(pyt_player, TurnType.MAINTENANCE, cmd)
+    def test_add_new_command_through_player_facade(
+        self,
+        game: Game,
+        player: Player,
+    ) -> None:
+        game.turn_number = 1
+        command = make_command(game, player, "A origin", "M")
 
-        assert len(pyt_player.commands) == 1
-        assert pyt_player.commands[0] == cmd
-        assert any("Orden" in line for line in report)
+        report = player.cmd_add_command(TurnType.MAINTENANCE, command)
 
-    def test_replace_existing_command(self, pyt_processor, pyt_player):
-        cmd1 = Command(actor="A A1", command="M", target="Madrid")
-        pyt_player.commands.append(cmd1)
+        assert player.commands == [command]
+        assert report == [
+            f"Orden `{command}` enviada.",
+            "**Órdenes recibidas hasta ahora:**",
+            f"`{command}`",
+        ]
 
-        cmd2 = Command(actor="A A1", command="S", target="Toledo")
-        pyt_processor.process_command(pyt_player, TurnType.MAINTENANCE, cmd2)
+    def test_replace_existing_command(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 1
+        current = make_command(game, player, "A origin", "M")
+        player.add_command(current)
+        previous_text = str(current)
+        replacement = make_command(game, player, "A origin", "D")
 
-        assert len(pyt_player.commands) == 1
-        assert pyt_player.commands[0].command == "S"
-        assert pyt_player.commands[0].target == "Toledo"
+        report = processor.process_command(player, TurnType.MAINTENANCE, replacement)
 
-    def test_delete_new_unit_command_with_d(self, pyt_processor, pyt_player):
-        cmd_initial = Command(actor="A A2", command="C", target="Sevilla")
-        pyt_player.commands.append(cmd_initial)
+        assert player.commands == [current]
+        assert current.command == "D"
+        assert current.target is None
+        assert report[1] == f"Sustituye la orden anterior `{previous_text}`."
 
-        cmd_delete = Command(actor="A A2", command="D", target="Sevilla")
-        pyt_processor.process_command(pyt_player, TurnType.MAINTENANCE, cmd_delete)
+    def test_disband_removes_order_for_new_unit(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 1
+        creation = make_command(game, player, "A reserve", "C", "origin")
+        player.add_command(creation)
+        disband = make_command(game, player, "A reserve", "D")
 
-        assert len(pyt_player.commands) == 0
+        processor.process_command(player, TurnType.MAINTENANCE, disband)
 
-    def test_multiple_commands_raises_value_error(self, pyt_processor, pyt_player):
-        pyt_player.commands.append(Command(actor="A A1", command="M", target="Madrid"))
-        pyt_player.commands.append(Command(actor="A A1", command="S", target="Toledo"))
+        assert player.commands == []
 
-        cmd = Command(actor="A A1", command="H", target="")
+    def test_duplicate_rows_for_actor_raise_value_error(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 1
+        first = make_command(game, player, "A origin", "M")
+        second = make_command(game, player, "A origin", "D")
+        player.commands = [first, second]
+        replacement = make_command(game, player, "A origin", "M")
+
         with pytest.raises(ValueError, match="Se encontraron múltiples comandos"):
-            pyt_processor.process_command(pyt_player, TurnType.MAINTENANCE, cmd)
+            processor.process_command(player, TurnType.MAINTENANCE, replacement)
+
+        assert player.commands == [first, second]
 
 
-class TestCampaignTurn:
-    def test_add_expense(self, pyt_processor, pyt_player):
-        cmd = Command(actor="E 1", command="5", target="Gold")
-        pyt_processor.process_command(pyt_player, TurnType.CAMPAIGN, cmd)
+class TestCampaignExpenses:
+    def test_add_new_expense(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 2
+        expense = make_command(game, player, "E 1", "5", "origin")
 
-        assert len(pyt_player.commands) == 1
-        assert pyt_player.commands[0] == cmd
+        processor.process_command(player, TurnType.CAMPAIGN, expense)
 
-    def test_update_or_remove_expense(self, pyt_processor, pyt_player):
-        expense = Command(actor="E 1", command="5", target="Gold")
-        pyt_player.commands.append(expense)
+        assert player.commands == [expense]
 
-        update_cmd = Command(actor="E 1", command="3", target="Gold")
-        pyt_processor.process_command(pyt_player, TurnType.CAMPAIGN, update_cmd)
-        assert pyt_player.commands[0].command == "3"
+    def test_update_existing_expense(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 2
+        expense = make_command(game, player, "E 1", "5", "origin")
+        player.add_command(expense)
+        previous_text = str(expense)
+        update = make_command(game, player, "E 1", "3", "origin")
 
-        remove_cmd = Command(actor="E 1", command="0", target="Gold")
-        pyt_processor.process_command(pyt_player, TurnType.CAMPAIGN, remove_cmd)
-        assert len(pyt_player.commands) == 0
+        report = processor.process_command(player, TurnType.CAMPAIGN, update)
 
-    def test_too_many_expenses_raises_exception(self, pyt_processor, pyt_player):
-        for i in range(4):
-            pyt_player.commands.append(
-                Command(actor=f"E {i}", command="2", target="Gold")
-            )
+        assert player.commands == [expense]
+        assert expense.command == "3"
+        assert report[1] == f"Sustituye la orden anterior `{previous_text}`."
 
-        new_expense = Command(actor="E 5", command="1", target="Gold")
+    def test_zero_cost_removes_existing_expense(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 2
+        expense = make_command(game, player, "E 1", "5", "origin")
+        player.add_command(expense)
+        previous_text = str(expense)
+        removal = make_command(game, player, "E 1", "0", "origin")
+
+        report = processor.process_command(player, TurnType.CAMPAIGN, removal)
+
+        assert player.commands == []
+        assert report[1] == f"Elimina el gasto anterior `{previous_text}`."
+
+    def test_more_than_four_expenses_raises_single_exception(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 2
+        player.commands = [
+            make_command(game, player, f"E {index}", "2", "origin")
+            for index in range(4)
+        ]
+        fifth = make_command(game, player, "E 5", "1", "origin")
+
         with pytest.raises(
-            TooManyExpenses, match="Solo se permiten hasta cuatro gastos"
+            TooManyExpenses,
+            match="Solo se permiten hasta cuatro gastos",
         ):
-            pyt_processor.process_command(pyt_player, TurnType.CAMPAIGN, new_expense)
+            processor.process_command(player, TurnType.CAMPAIGN, fifth)
 
-    def test_campaign_standard_command_replacement(self, pyt_processor, pyt_player):
-        cmd1 = Command(actor="A A1", command="M", target="Madrid")
-        pyt_player.commands.append(cmd1)
+        assert len(player.commands) == 4
 
-        cmd2 = Command(actor="A A1", command="H", target="")
-        pyt_processor.process_command(pyt_player, TurnType.CAMPAIGN, cmd2)
 
-        assert len(pyt_player.commands) == 1
-        assert pyt_player.commands[0].command == "H"
+class TestCampaignOrders:
+    def test_standard_order_replaces_previous_order(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 2
+        current = make_command(game, player, "A origin", "H")
+        player.add_command(current)
+        previous_text = str(current)
+        replacement = make_command(game, player, "A origin", "A", "destination")
+
+        report = processor.process_command(player, TurnType.CAMPAIGN, replacement)
+
+        assert player.commands == [replacement]
+        assert report[1] == f"Sustituye la orden anterior `{previous_text}`."
+
+    def test_valid_convoy_appends_segment(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 2
+        first_segment = make_command(game, player, "A origin", "A", "sea-one")
+        player.add_command(first_segment)
+        destination = make_command(game, player, "A origin", "A", "destination")
+
+        processor.process_command(player, TurnType.CAMPAIGN, destination)
+
+        assert player.commands == [first_segment, destination]
+
+    def test_invalid_convoy_replaces_previous_segments(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 2
+        first_segment = make_command(game, player, "A origin", "A", "sea-one")
+        player.add_command(first_segment)
+        invalid_destination = make_command(game, player, "A origin", "A", "fort")
+
+        processor.process_command(player, TurnType.CAMPAIGN, invalid_destination)
+
+        assert player.commands == [invalid_destination]
+
+    def test_order_without_target_is_preserved(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 2
+        hold = make_command(game, player, "F sea-two", "H")
+
+        processor.process_command(player, TurnType.CAMPAIGN, hold)
+
+        assert player.commands == [hold]
+        assert player.commands[0].target is None
+
+    def test_report_messages_and_commands_keep_stable_order(
+        self,
+        game: Game,
+        player: Player,
+        processor: OrderProcessor,
+    ) -> None:
+        game.turn_number = 2
+        army = make_command(game, player, "A origin", "H")
+        fleet = make_command(game, player, "F sea-one", "H")
+        garrison = make_command(game, player, "G fort", "H")
+        player.commands = [army, fleet]
+
+        report = processor.process_command(player, TurnType.CAMPAIGN, garrison)
+
+        assert report == [
+            f"Orden `{garrison}` enviada.",
+            "**Órdenes recibidas hasta ahora:**",
+            f"`{army}`",
+            f"`{fleet}`",
+            f"`{garrison}`",
+        ]
+        assert player.commands == [army, fleet, garrison]

@@ -1,12 +1,12 @@
 """Public domain API for Machiavelli games."""
 
 from .command import Command
-from .game import (
+from .exceptions import (
     DuplicatedGameException,
     FailedToStartError,
-    Game,
     GameNotFoundException,
 )
+from .game import Game
 from .player import Player, TurnType
 
 __all__ = [
