@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from machiavelli.engine import GameEngine
+from machiavelli.engine.military import DislodgementResolver
 from machiavelli.game import (
     Command,
     Game,
@@ -68,16 +69,24 @@ class GameService:
             target=target,
         )
 
-    def create_game(self, name: str, channel_id: int, scenario_name: str) -> Game:
-        """Create a fully initialized game aggregate and persist it."""
-        scenario_id, scenario = self._resolve_scenario(scenario_name)
-        game = Game(
-            name=name,
-            channel_id=channel_id,
-            scenario_id=scenario_id,
-            scenario=scenario,
-            map=Map.load_map(exclude_ids=scenario.excluded_locations),
-        )
+    def create_game(
+        self,
+        name: str,
+        channel_id: int,
+        scenario_name: str | None = None,
+    ) -> Game:
+        """Create and persist a game, optionally initializing its scenario."""
+        if scenario_name is None:
+            game = Game(name=name, channel_id=channel_id)
+        else:
+            scenario_id, scenario = self._resolve_scenario(scenario_name)
+            game = Game(
+                name=name,
+                channel_id=channel_id,
+                scenario_id=scenario_id,
+                scenario=scenario,
+                map=Map.load_map(exclude_ids=scenario.excluded_locations),
+            )
         self.repo.save(game)
         return game
 
@@ -121,15 +130,65 @@ class GameService:
         game = self.get_game(channel_id)
         removed_player = game.remove_player(discord_id=discord_id)
         self.repo.save(game)
-        remaining = [
-            (player.player_id, player.discord_id) for player in game.players
-        ]
+        remaining = [(player.player_id, player.discord_id) for player in game.players]
         return removed_player.player_id, remaining
 
-    def run_turn(self, channel_id: int) -> list[str]:
+    def set_scenario(self, channel_id: int, scenario_name: str) -> str:
+        """Assign a known scenario and refresh the map before persisting."""
+        scenario_id, scenario = self._resolve_scenario(scenario_name)
+        game = self.get_game(channel_id)
+        game.scenario_id = scenario_id
+        game.scenario = scenario
+        game.map = Map.load_map(exclude_ids=scenario.excluded_locations)
+        self.repo.save(game)
+        return scenario.name
+
+    def update_deadlines(
+        self,
+        channel_id: int,
+        *,
+        weekly_deadline: str | None = None,
+        next_deadline: str | None = None,
+    ) -> str:
+        """Persist already validated deadline values and return the game name."""
+        game = self.get_game(channel_id)
+        if weekly_deadline is not None:
+            game.weekly_deadline = weekly_deadline
+        if next_deadline is not None:
+            game.next_deadline = next_deadline
+        self.repo.save(game)
+        return game.name
+
+    def get_status_report(self, channel_id: int) -> list[str]:
+        """Return the public game-status report without exposing persistence."""
+        return self.get_game(channel_id).report_status()
+
+    def get_turn_report(self, channel_id: int) -> list[str]:
+        """Return the persisted report for the latest turn."""
+        return self.get_game(channel_id).turn_report()
+
+    def get_player_commands(
+        self,
+        channel_id: int,
+        discord_id: int,
+    ) -> tuple[str, list[str]]:
+        """Return a player's identifier and current commands as display strings."""
+        game = self.get_game(channel_id)
+        player = self.resolve_player(game, discord_id)
+        return player.player_id, [str(command) for command in player.commands]
+
+    def run_turn(
+        self,
+        channel_id: int,
+        *,
+        dislodgement_resolver: DislodgementResolver | None = None,
+    ) -> list[str]:
         """Execute one turn, then persist the resulting aggregate atomically."""
         game = self.get_game(channel_id)
-        GameEngine(game).run()
+        GameEngine(
+            game,
+            dislodgement_resolver=dislodgement_resolver,
+        ).run()
         report_lines = game.turn_report()
         self.repo.save(game)
         return report_lines
@@ -141,16 +200,78 @@ class GameService:
         command_payload: dict[str, Any],
         selected_power: str | None = None,
     ) -> list[str]:
-        """Register or replace an order through the canonical order processor."""
+        """Validate, register, and persist an order through canonical services."""
         game = self.get_game(channel_id)
         player = self.resolve_player(game, discord_id, selected_power)
         command = self._command_from_payload(game, player, command_payload)
+
+        valid_actors = {code for code, _label in player.cmd_available_actors()}
+        if command.actor not in valid_actors:
+            raise ValueError(f"`{command.actor}` no es un actor válido.")
+
+        valid_commands = {
+            code for code, _label in player.cmd_available_commands(command.actor)
+        }
+        if command.command not in valid_commands:
+            raise ValueError(f"`{command.command}` no es una orden válida.")
+
+        valid_targets = [
+            code
+            for code, _label in player.cmd_available_targets(
+                command.actor,
+                command.command,
+            )
+        ]
+        if (
+            valid_targets
+            and valid_targets[0] != ""
+            and command.target not in valid_targets
+        ):
+            raise ValueError(f"`{command.target}` no es un objetivo válido.")
+
         turn_type = (
-            TurnType.MAINTENANCE
-            if game.turn_number % 4 == 1
-            else TurnType.CAMPAIGN
+            TurnType.MAINTENANCE if game.turn_number % 4 == 1 else TurnType.CAMPAIGN
         )
         report = player.cmd_add_command(turn_type, command)
+        self.repo.save(game)
+        return report
+
+    def submit_expense(
+        self,
+        channel_id: int,
+        discord_id: int,
+        *,
+        expense: str,
+        target: str,
+        amount: str,
+        selected_power: str | None = None,
+    ) -> list[str]:
+        """Validate, register, and persist one campaign expense."""
+        game = self.get_game(channel_id)
+        player = self.resolve_player(game, discord_id, selected_power)
+
+        valid_expenses = {code for code, _label in player.exp_available_expenses()}
+        if expense not in valid_expenses:
+            raise ValueError(f"`{expense}` no es un gasto válido.")
+
+        valid_targets = {code for code, _label in player.exp_available_targets(expense)}
+        if target not in valid_targets:
+            raise ValueError(f"`{target}` no es un objetivo válido.")
+
+        valid_amounts = {
+            code for code, _label in player.exp_available_amounts(expense, target)
+        }
+        if amount not in valid_amounts:
+            raise ValueError(f"`{amount}` no es una cantidad válida.")
+
+        command = Command(
+            game=game,
+            player=player,
+            actor=expense,
+            command=amount,
+            target=target,
+        )
+        report = player.cmd_add_command(TurnType.CAMPAIGN, command)
         self.repo.save(game)
         return report
 
@@ -208,3 +329,87 @@ class GameService:
             return player.cmd_available_actors()
         except (GameNotFoundException, PlayerNotFoundException):
             return []
+
+    def get_available_commands(
+        self,
+        channel_id: int,
+        discord_id: int,
+        actor: str,
+        selected_power: str | None = None,
+    ) -> list[ActorOption]:
+        """Return command choices for one actor, or no choices on lookup failure."""
+        try:
+            game = self.get_game(channel_id)
+            player = self.resolve_player(game, discord_id, selected_power)
+            return player.cmd_available_commands(actor)
+        except (GameNotFoundException, PlayerNotFoundException):
+            return []
+
+    def get_available_targets(
+        self,
+        channel_id: int,
+        discord_id: int,
+        actor: str,
+        command: str,
+        selected_power: str | None = None,
+    ) -> list[ActorOption]:
+        """Return target choices for one order, or no choices on lookup failure."""
+        try:
+            game = self.get_game(channel_id)
+            player = self.resolve_player(game, discord_id, selected_power)
+            return player.cmd_available_targets(actor, command)
+        except (GameNotFoundException, PlayerNotFoundException):
+            return []
+
+    def get_available_expenses(
+        self,
+        channel_id: int,
+        discord_id: int,
+        selected_power: str | None = None,
+    ) -> list[ActorOption]:
+        """Return expense choices, or no choices on lookup failure."""
+        try:
+            game = self.get_game(channel_id)
+            player = self.resolve_player(game, discord_id, selected_power)
+            return player.exp_available_expenses()
+        except (GameNotFoundException, PlayerNotFoundException):
+            return []
+
+    def get_expense_targets(
+        self,
+        channel_id: int,
+        discord_id: int,
+        expense: str,
+        selected_power: str | None = None,
+    ) -> list[ActorOption]:
+        """Return target choices for one expense, or no choices on lookup failure."""
+        try:
+            game = self.get_game(channel_id)
+            player = self.resolve_player(game, discord_id, selected_power)
+            return player.exp_available_targets(expense)
+        except (GameNotFoundException, PlayerNotFoundException):
+            return []
+
+    def get_expense_amounts(
+        self,
+        channel_id: int,
+        discord_id: int,
+        expense: str,
+        target: str,
+        selected_power: str | None = None,
+    ) -> list[ActorOption]:
+        """Return amount choices for one expense, or no choices on lookup failure."""
+        try:
+            game = self.get_game(channel_id)
+            player = self.resolve_player(game, discord_id, selected_power)
+            return player.exp_available_amounts(expense, target)
+        except (GameNotFoundException, PlayerNotFoundException):
+            return []
+
+    def get_active_powers(self, channel_id: int) -> list[str]:
+        """Return assigned power identifiers in authoritative player order."""
+        return [
+            player.power
+            for player in self.get_game(channel_id).players
+            if player.power is not None
+        ]
