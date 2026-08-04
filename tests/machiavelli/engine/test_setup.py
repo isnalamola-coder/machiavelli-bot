@@ -3,7 +3,6 @@ from random import Random
 from unittest.mock import Mock
 
 import pytest
-from helpers import create_mock_game, create_mock_player
 
 from machiavelli.engine.exceptions import (
     DuplicatePlayerError,
@@ -12,6 +11,8 @@ from machiavelli.engine.exceptions import (
     ScenarioNotSelectedError,
 )
 from machiavelli.engine.setup import SetupManager
+
+from .helpers import create_mock_game, create_mock_player
 
 
 def test_setup_raises_scenario_not_selected():

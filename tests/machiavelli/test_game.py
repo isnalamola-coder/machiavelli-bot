@@ -12,14 +12,14 @@ import pytest
 
 from machiavelli import database
 from machiavelli.events import EventType, TurnEvent
-from machiavelli.game import (
-    Command,
+from machiavelli.game.command import Command
+from machiavelli.game.game import (
     DuplicatedGameException,
     Game,
     GameNotFoundException,
     Player,
 )
-from machiavelli.map import Map, Province
+from machiavelli.game.map import Map, Province
 
 
 def test_player_constructor():
@@ -140,9 +140,7 @@ def test_rebelled_city_recruitment_is_rejected_before_charging():
     """Impide reclutar en ciudad rebelada sin descontar el coste."""
     game_map = Map(
         provinces={
-            "fort": Province(
-                "Fort", custom_id="fort", city="fortified", has_port=True
-            )
+            "fort": Province("Fort", custom_id="fort", city="fortified", has_port=True)
         },
         seas={},
     )

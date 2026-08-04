@@ -62,3 +62,14 @@ class TurnExecutionFailed(EngineError):
     """Se lanza cuando falla la ejecución de un turno o el setup inicial."""
 
     pass
+
+
+class TooManyExpenses(EngineError):
+    """Se lanza cuando un jugador intenta registrar más de cuatro gastos por campaña."""
+
+    def __init__(
+        self,
+        message: str = "Solo se permiten hasta cuatro gastos por campaña",
+    ) -> None:
+        super().__init__(message)
+        self.message = message

@@ -7,9 +7,9 @@ from unittest.mock import Mock
 
 from machiavelli.engine.core import GameEngine
 from machiavelli.game.command import Command
-from machiavelli.game.player import Player
 from machiavelli.game.game import Game
 from machiavelli.game.map import Map
+from machiavelli.game.player import Player
 from machiavelli.game.scenario import Scenario
 
 
@@ -27,8 +27,6 @@ MILITARY_ORDERINGS = (
     MilitaryOrdering(reverse_collections=True),
     MilitaryOrdering(reverse_players=True, reverse_collections=True),
 )
-from machiavelli.engine.core import GameEngine
-from machiavelli.game.game import Game, Player
 
 
 def create_mock_player(
@@ -128,9 +126,7 @@ def create_military_game(
         player_specs = []
     elif isinstance(players, Mapping):
         player_specs = [
-            {**value, "player_id": player_id}
-            if isinstance(value, Mapping)
-            else value
+            {**value, "player_id": player_id} if isinstance(value, Mapping) else value
             for player_id, value in players.items()
         ]
     else:
@@ -256,9 +252,7 @@ def _create_military_player(
     )
 
 
-def _orders_by_player(
-    orders: object, players: list[Player]
-) -> dict[str, list[object]]:
+def _orders_by_player(orders: object, players: list[Player]) -> dict[str, list[object]]:
     """Normaliza órdenes globales o agrupadas por jugador."""
     if orders is None:
         return {}

@@ -10,7 +10,7 @@ from datetime import datetime
 import discord
 from discord import app_commands
 
-from machiavelli.engine import GameEngine
+from machiavelli.engine.core import GameEngine
 from machiavelli.engine.military import (
     DislodgementResolver,
     DislodgementResolverRequired,
@@ -18,16 +18,16 @@ from machiavelli.engine.military import (
     MilitaryResolutionError,
     UnresolvedMilitaryConflict,
 )
-from machiavelli.game import (
-    Command,
+from machiavelli.game.command import Command
+from machiavelli.game.game import (
     DuplicatedGameException,
     Game,
     GameNotFoundException,
-    Player,
     TooManyExpenses,
 )
-from machiavelli.scenario import Scenario
-from machiavelli.tables import GameTables
+from machiavelli.game.player import Player
+from machiavelli.game.scenario import Scenario
+from machiavelli.game.tables import GameTables
 
 logger = logging.getLogger(__name__)
 
@@ -478,9 +478,7 @@ async def run_game(interaction: discord.Interaction):
             "La fase militar abortó sin commit",
             extra={"cycle_diagnostic": getattr(error, "diagnostic", None)},
         )
-        await interaction.edit_original_response(
-            content=_military_error_message(error)
-        )
+        await interaction.edit_original_response(content=_military_error_message(error))
         return
     except Exception as error:
         error_detallado = format_error_with_location(error)
@@ -506,9 +504,7 @@ async def run_game(interaction: discord.Interaction):
             await interaction.followup.send(current_message, ephemeral=False)
             current_message = line
         else:
-            current_message = (
-                f"{current_message}\n{line}" if current_message else line
-            )
+            current_message = f"{current_message}\n{line}" if current_message else line
 
     if current_message:
         await interaction.followup.send(current_message, ephemeral=False)
@@ -595,8 +591,7 @@ async def game_report(interaction: discord.Interaction):
         )
     except Exception as e:
         await interaction.followup.send(
-            "**Error inesperado al mostrar el informe:** "
-            f"`{type(e).__name__}: {e}`.",
+            f"**Error inesperado al mostrar el informe:** `{type(e).__name__}: {e}`.",
             ephemeral=True,
         )
 

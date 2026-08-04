@@ -2,7 +2,7 @@
 
 import unittest
 
-from machiavelli.game import Game
+from machiavelli.game.game import Game
 from tests.machiavelli.engine.helpers import (
     create_mock_game,
     create_mock_player,

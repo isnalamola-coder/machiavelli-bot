@@ -26,9 +26,9 @@ from machiavelli.engine.military import (
     UnresolvedMilitaryConflict,
     conflict_location,
 )
-from machiavelli.game import Game
-from machiavelli.map import Map, Province, Route, Sea
-from machiavelli.scenario import Rules, Scenario, VictoryConditions
+from machiavelli.game.game import Game
+from machiavelli.game.map import Map, Province, Route, Sea
+from machiavelli.game.scenario import Rules, Scenario, VictoryConditions
 from tests.machiavelli.engine.helpers import (
     create_military_game,
     iter_military_orderings,
@@ -121,6 +121,7 @@ def convoy_map() -> Map:
 
 class TestMilitaryModelsAndIndex(unittest.TestCase):
     """Verifica identidades, snapshots e índices militares iniciales."""
+
     def test_unit_key_is_immutable_hashable_and_keeps_coast(self):
         coast = UnitKey("P1", "F", "coast S")
         self.assertEqual(coast, UnitKey("P1", "F", "coast S"))
@@ -182,11 +183,10 @@ class TestMilitaryModelsAndIndex(unittest.TestCase):
 
 class TestOrderCompilation(unittest.TestCase):
     """Comprueba la compilación y validación estática de órdenes."""
+
     def _compile(self, players, orders, **game_kwargs):
         resolver = MilitaryResolver(
-            create_military_game(
-                military_map(), players, orders=orders, **game_kwargs
-            )
+            create_military_game(military_map(), players, orders=orders, **game_kwargs)
         )
         resolver._build_unit_index()
         resolver._compile_orders()
@@ -400,6 +400,7 @@ class TestOrderCompilation(unittest.TestCase):
 
 class TestAtomicResolution(unittest.TestCase):
     """Garantiza resultados completos y rollback ante cualquier fallo."""
+
     def _game(self):
         return create_military_game(
             military_map(),
@@ -599,6 +600,7 @@ class TestAtomicResolution(unittest.TestCase):
     def test_commit_failure_restores_all_collections_and_events(self):
         class FailingPlayer:
             """Fuerza un fallo puntual durante la frontera de commit."""
+
             def __init__(self, source):
                 self.player_id = source.player_id
                 self.power = source.power
@@ -626,6 +628,7 @@ class TestAtomicResolution(unittest.TestCase):
     def test_persistent_rollback_failure_preserves_other_collections(self):
         class PersistentFailingPlayer:
             """Simula un atributo que falla al aplicar y al restaurar."""
+
             def __init__(self, source):
                 self.player_id = source.player_id
                 self.power = source.power
@@ -661,6 +664,7 @@ class TestAtomicResolution(unittest.TestCase):
 
 class TestConvoyCompilationAndResolution(unittest.TestCase):
     """Cubre rutas encadenadas, transportes y rotura de convoyes."""
+
     def _game(
         self,
         *,
@@ -913,6 +917,7 @@ class TestConvoyCompilationAndResolution(unittest.TestCase):
 
 class TestConflictConstructionAndSupport(unittest.TestCase):
     """Valida la construcción de conflictos, cruces y fuerza de apoyo."""
+
     def test_support_faction_forms_and_garrison_support_province(self):
         supporter = UnitKey("P3", "A", "c")
         for target, faction in (("b", "G"), ("b (M)", "M")):
@@ -1138,14 +1143,13 @@ class TestConflictConstructionAndSupport(unittest.TestCase):
         self.assertTrue(outcomes[supporter].dislodged)
         self.assertEqual(outcomes[UnitKey("P1", "A", "a")].final_location, "a")
         self.assertEqual(outcomes[UnitKey("P2", "A", "f")].final_location, "f")
-        self.assertEqual(
-            event.data["dislodgements"], [["P1", "A", "c"]]
-        )
+        self.assertEqual(event.data["dislodgements"], [["P1", "A", "c"]])
         self.assertEqual(event.data["cancelled_orders"].count(["P1", "A", "c"]), 1)
 
 
 class TestDependencyResolution(unittest.TestCase):
     """Comprueba el orden estable entre grupos de conflicto dependientes."""
+
     def _support_dependency_game(self):
         provinces = {
             name: Province(name, custom_id=name)
@@ -1271,8 +1275,10 @@ class TestDependencyResolution(unittest.TestCase):
         self.assertNotIn("b", state.resolved_conflicts)
         self.assertNotIn("b", resolver._build_resolution(state).contested_locations)
 
+
 class TestCyclesAndCancellationSemantics(unittest.TestCase):
     """Cubre ciclos, diagnósticos y efectos exactos de las cancelaciones."""
+
     def _double_convoy_game(self, *, include_q=False):
         provinces = {
             name: Province(name, custom_id=name)
@@ -1634,6 +1640,7 @@ class TestCyclesAndCancellationSemantics(unittest.TestCase):
 
         class ObservingResolver(MilitaryResolver):
             """Expone los apoyos elegidos durante la ruptura del ciclo."""
+
             targeted_observations = []
 
             def _targeted_supports(self, state):
@@ -1724,8 +1731,10 @@ class TestCyclesAndCancellationSemantics(unittest.TestCase):
                 "P3": [("A q", "S", "p1 (M)")],
             },
         )
+
         class RecordingResolver(MilitaryResolver):
             """Registra cada cancelación de apoyos aplicada por el resolver."""
+
             def __init__(self, game):
                 super().__init__(game)
                 self.cancelled_support_groups = []
@@ -1825,12 +1834,11 @@ class TestCyclesAndCancellationSemantics(unittest.TestCase):
 
 class TestRebellions(unittest.TestCase):
     """Verifica la fuerza rebelde y sus transiciones finales."""
+
     @staticmethod
     def _remove_all_dislodged(resolution):
         return {
-            outcome.unit: None
-            for outcome in resolution.outcomes
-            if outcome.dislodged
+            outcome.unit: None for outcome in resolution.outcomes if outcome.dislodged
         }
 
     @staticmethod
@@ -2225,6 +2233,7 @@ class TestRebellions(unittest.TestCase):
 
 class TestSiegesAndRestrictedConversions(unittest.TestCase):
     """Cubre asedios y restricciones de conversión asociadas."""
+
     @staticmethod
     def _compiled(game):
         resolver = MilitaryResolver(game)
@@ -2236,9 +2245,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
     @staticmethod
     def _remove_all_dislodged(resolution):
         return {
-            outcome.unit: None
-            for outcome in resolution.outcomes
-            if outcome.dislodged
+            outcome.unit: None for outcome in resolution.outcomes if outcome.dislodged
         }
 
     @staticmethod
@@ -2305,7 +2312,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
         self.assertEqual(first_event["rebellions"], [])
         self.assertEqual(
             first_event["sieges"],
-            [[['P1', 'A', 'fort'], 'fort', 'started']],
+            [[["P1", "A", "fort"], "fort", "started"]],
         )
 
         second = create_military_game(
@@ -2331,7 +2338,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
         self.assertEqual(second_event["rebellions"], [])
         self.assertEqual(
             second_event["sieges"],
-            [[['P1', 'A', 'fort'], 'fort', 'completed']],
+            [[["P1", "A", "fort"], "fort", "completed"]],
         )
         self.assertEqual(
             military_snapshot(second),
@@ -2448,7 +2455,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
         self.assertEqual(event["rebellions"], [])
         self.assertEqual(
             event["sieges"],
-            [[['P1', 'A', 'fort'], 'fort', 'completed']],
+            [[["P1", "A", "fort"], "fort", "completed"]],
         )
         self.assertEqual(
             military_snapshot(game),
@@ -2490,7 +2497,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
         )
         self.assertEqual(
             event["sieges"],
-            [[['P1', 'A', 'fort'], 'fort', 'completed']],
+            [[["P1", "A", "fort"], "fort", "completed"]],
         )
 
     def test_lift_siege_keeps_target(self):
@@ -2510,7 +2517,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
         self.assertEqual(event["dislodgements"], [])
         self.assertEqual(
             event["sieges"],
-            [[['P1', 'A', 'fort'], 'fort', 'lifted']],
+            [[["P1", "A", "fort"], "fort", "lifted"]],
         )
 
     def test_dislodged_besieger_lifts_siege_without_removing_target(self):
@@ -2558,7 +2565,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
         self.assertEqual(event["dislodgements"], [["P1", "A", "fort"]])
         self.assertEqual(
             event["sieges"],
-            [[['P1', 'A', 'fort'], 'fort', 'lifted']],
+            [[["P1", "A", "fort"], "fort", "lifted"]],
         )
         self.assertNotEqual(military_snapshot(game), before)
 
@@ -2625,7 +2632,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
         self.assertEqual(first_event["rebellions"], [])
         self.assertEqual(
             first_event["sieges"],
-            [[['P1', 'A', 'keep'], 'keep', 'started']],
+            [[["P1", "A", "keep"], "keep", "started"]],
         )
         self.assertEqual(
             military_snapshot(first),
@@ -2674,7 +2681,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
         )
         self.assertEqual(
             second_event["sieges"],
-            [[['P1', 'A', 'keep'], 'keep', 'completed']],
+            [[["P1", "A", "keep"], "keep", "completed"]],
         )
         self.assertEqual(
             military_snapshot(second),
@@ -2743,9 +2750,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
                 )
                 resolver = self._compiled(game)
                 self.assertEqual(
-                    resolver.orders_by_unit[
-                        UnitKey("P1", "A", "fort")
-                    ].order_type,
+                    resolver.orders_by_unit[UnitKey("P1", "A", "fort")].order_type,
                     expected,
                 )
 
@@ -2769,9 +2774,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
                 )
                 resolver = self._compiled(game)
                 self.assertEqual(
-                    resolver.orders_by_unit[
-                        UnitKey("P2", "G", "fort")
-                    ].order_type,
+                    resolver.orders_by_unit[UnitKey("P2", "G", "fort")].order_type,
                     expected,
                 )
 
@@ -2833,6 +2836,7 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
 
 class TestDislodgementContract(unittest.TestCase):
     """Valida el contrato externo de retiradas y eliminaciones."""
+
     @staticmethod
     def _single_dislodgement_game(*, turn_events=("before",)):
         return create_military_game(
@@ -2955,6 +2959,7 @@ class TestDislodgementContract(unittest.TestCase):
 
         class ExplodingMapping(Mapping):
             """Simula un mapping que falla al materializar sus decisiones."""
+
             def __getitem__(self, key):
                 raise external_error
 
@@ -3093,13 +3098,11 @@ class TestDislodgementContract(unittest.TestCase):
         self.assertEqual(event["dislodgements"], [[None, "G", "fort"]])
 
 
-REPRESENTATIVE_DISLODGEMENT_DECISIONS: Mapping[UnitKey, str | None] = (
-    MappingProxyType(
-        {
-            UnitKey("P2", "A", "cross00b"): "retreat",
-            UnitKey("P2", "A", "cross01b"): None,
-        }
-    )
+REPRESENTATIVE_DISLODGEMENT_DECISIONS: Mapping[UnitKey, str | None] = MappingProxyType(
+    {
+        UnitKey("P2", "A", "cross00b"): "retreat",
+        UnitKey("P2", "A", "cross01b"): None,
+    }
 )
 
 
@@ -3123,9 +3126,7 @@ def build_representative_game() -> Game:
     crossing_pairs = tuple(
         (f"cross{index:02d}a", f"cross{index:02d}b") for index in range(10)
     )
-    province_names = {
-        location for pair in crossing_pairs for location in pair
-    } | {
+    province_names = {location for pair in crossing_pairs for location in pair} | {
         "convoy-origin",
         "convoy-destination",
         "hold0",
@@ -3179,20 +3180,16 @@ def build_representative_game() -> Game:
     ]
     orders = {
         "P1": [
-            (f"A {origin}", "A", destination)
-            for origin, destination in crossing_pairs
+            (f"A {origin}", "A", destination) for origin, destination in crossing_pairs
         ]
         + [
             ("A support0", "S", "cross00b"),
             ("A support1", "S", "cross01b"),
         ],
         "P2": [
-            (f"A {destination}", "A", origin)
-            for origin, destination in crossing_pairs
+            (f"A {destination}", "A", origin) for origin, destination in crossing_pairs
         ],
-        "P3": [
-            ("A convoy-origin", "A", target) for target in convoy_targets
-        ]
+        "P3": [("A convoy-origin", "A", target) for target in convoy_targets]
         + [(f"F {sea}", "T", "A convoy-origin") for sea in seas],
         "P4": [("A hold0", "H", ""), ("A hold1", "H", "")],
     }
@@ -3242,12 +3239,11 @@ def _record_manager_snapshot(
 
 class TestRepresentativeMilitaryResolution(unittest.TestCase):
     """Valida determinismo y presupuesto de la carga normativa."""
+
     def test_representative_resolution_determinism(self):
         observations = []
         expected_conflicts = frozenset(
-            f"cross{index:02d}{side}"
-            for index in range(10)
-            for side in ("a", "b")
+            f"cross{index:02d}{side}" for index in range(10) for side in ("a", "b")
         )
 
         for _iteration in range(5):
@@ -3409,6 +3405,7 @@ def _build_integrated_acceptance_game() -> Game:
 
 class TestIntegratedMilitaryAcceptance(unittest.TestCase):
     """Cierra la aceptación integrada y la invariancia de orden incidental."""
+
     def test_integrated_military_acceptance_is_invariant_under_incidental_order(self):
         event_keys = (
             "outcomes",

@@ -16,11 +16,12 @@ from machiavelli.engine.military import (
     MilitaryResolutionError,
     UnresolvedMilitaryConflict,
 )
-from machiavelli.game import GameNotFoundException
+from machiavelli.game.game import GameNotFoundException
 
 
 class TestRunGameWorker(unittest.TestCase):
     """Verifica que carga, motor, informe y guardado comparten un único worker."""
+
     @patch("machiavelli.discord.GameEngine")
     @patch("machiavelli.discord.Game.load_game")
     @patch("machiavelli.discord.sqlite3.connect")
@@ -80,6 +81,7 @@ class TestRunGameWorker(unittest.TestCase):
 
 class TestRunGame(unittest.IsolatedAsyncioTestCase):
     """Comprueba la traducción de errores y la publicación del informe."""
+
     def setUp(self):
         """Crea una interacción asíncrona aislada para cada caso."""
         self.interaction = Mock(name="interaction")

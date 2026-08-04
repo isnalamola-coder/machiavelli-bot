@@ -8,8 +8,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from ..events import TurnEvent
-from ..game import Game, Player
-from ..map import MovementMode
+from ..game.game import Game
+from ..game.map import MovementMode
+from ..game.player import Player
 
 type ResolutionValue = str | int | bool | None | tuple[ResolutionValue, ...]
 type ResolutionSignature = tuple[ResolutionValue, ...]
@@ -234,13 +235,10 @@ class MilitaryResolver:
                         for key in self.units_by_key
                     ):
                         raise InvalidMilitaryState(
-                            "Rebelión urbana incompatible con guarnición: "
-                            f"{location}"
+                            f"Rebelión urbana incompatible con guarnición: {location}"
                         )
                     if location in self.rebellions_by_location:
-                        raise InvalidMilitaryState(
-                            f"Rebelión duplicada: {location}"
-                        )
+                        raise InvalidMilitaryState(f"Rebelión duplicada: {location}")
                     self.rebellions_by_location[location] = (player.player_id, kind)
 
     def _compile_orders(self) -> None:
@@ -366,9 +364,7 @@ class MilitaryResolver:
             siege_location = target or province
             reason = self._besiege_invalid_reason(key, siege_location)
             if reason is None:
-                self.orders_by_unit[key] = MilitaryOrder(
-                    key, "B", siege_location
-                )
+                self.orders_by_unit[key] = MilitaryOrder(key, "B", siege_location)
             return reason
         elif order.order_type == "L":
             siege_location = target or province
@@ -472,11 +468,7 @@ class MilitaryResolver:
         city_rebellion = rebellion is not None and rebellion[1] == "city"
         if not garrison_present and not city_rebellion:
             return "asedio sin objetivo"
-        if (
-            city_rebellion
-            and not garrison_present
-            and rebellion[0] != key.player_id
-        ):
+        if city_rebellion and not garrison_present and rebellion[0] != key.player_id:
             return "solo el controlador puede someter la rebelión urbana"
         return None
 
@@ -883,9 +875,7 @@ class MilitaryResolver:
             frozenset(locations) if len(factions) > 1 else frozenset(),
         )
 
-    def _conflict_location_for(
-        self, unit: UnitKey, moving: frozenset[UnitKey]
-    ) -> str:
+    def _conflict_location_for(self, unit: UnitKey, moving: frozenset[UnitKey]) -> str:
         """Calcula la plaza defendida o atacada por una unidad del grupo."""
         order = self.orders_by_unit[unit]
         if unit not in moving:
@@ -1340,21 +1330,11 @@ class MilitaryResolver:
             order = self.orders_by_unit[besieger]
             if besieger in state.dislodged_units:
                 active_sieges.remove(location)
-                siege_events.append(
-                    [self._primitive_key(besieger), location, "lifted"]
-                )
-            elif (
-                order.order_type == "L"
-                and besieger not in state.cancelled_orders
-            ):
+                siege_events.append([self._primitive_key(besieger), location, "lifted"])
+            elif order.order_type == "L" and besieger not in state.cancelled_orders:
                 active_sieges.remove(location)
-                siege_events.append(
-                    [self._primitive_key(besieger), location, "lifted"]
-                )
-            elif (
-                order.order_type == "B"
-                and besieger not in state.cancelled_orders
-            ):
+                siege_events.append([self._primitive_key(besieger), location, "lifted"])
+            elif order.order_type == "B" and besieger not in state.cancelled_orders:
                 active_sieges.remove(location)
                 rebellion_event, removed_unit = self._remove_siege_target(
                     location, player_collections, independent, rebellions
@@ -1378,9 +1358,7 @@ class MilitaryResolver:
                 and location not in self.game.besieges
             ):
                 active_sieges.add(location)
-                siege_events.append(
-                    [self._primitive_key(key), location, "started"]
-                )
+                siege_events.append([self._primitive_key(key), location, "started"])
 
         final_dislodged = state.dislodged_units | frozenset(siege_dislodged)
         # Las rebeliones provinciales se actualizan desde el resultado militar estable.
@@ -1398,9 +1376,7 @@ class MilitaryResolver:
                     final_dislodged,
                 ):
                     rebellions[owner_id]["province"].remove(location)
-                    rebellion_events.append(
-                        [owner_id, "province", location, "subdued"]
-                    )
+                    rebellion_events.append([owner_id, "province", location, "subdued"])
 
         for collections in rebellions.values():
             collections["province"].sort()
@@ -1602,9 +1578,11 @@ class MilitaryResolver:
                 raise MilitaryResolutionError(
                     "Una guarnición eliminada por asedio no puede retirarse"
                 )
-            if destination is not None and conflict_location(
-                destination, outcomes[key].final_unit_type
-            ) in resolution.contested_locations:
+            if (
+                destination is not None
+                and conflict_location(destination, outcomes[key].final_unit_type)
+                in resolution.contested_locations
+            ):
                 raise MilitaryResolutionError(
                     "Destino de retirada situado en un lugar disputado"
                 )
@@ -1846,9 +1824,7 @@ class MilitaryResolver:
                 primitive_keys(state.cancelled_orders),
                 primitive_keys(self._broken_convoys),
                 primitive_keys(
-                    outcome.unit
-                    for outcome in resolution.outcomes
-                    if outcome.dislodged
+                    outcome.unit for outcome in resolution.outcomes if outcome.dislodged
                 ),
                 rebellions if rebellions is not None else [],
                 sieges if sieges is not None else [],
