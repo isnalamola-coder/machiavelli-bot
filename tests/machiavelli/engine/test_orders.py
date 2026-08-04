@@ -8,7 +8,7 @@ from machiavelli.engine.exceptions import TooManyExpenses
 from machiavelli.engine.orders import OrderProcessor
 from machiavelli.game.command import Command
 from machiavelli.game.player import TurnType
-from tests.helpers import create_mock_game, create_mock_player
+from tests.machiavelli.engine.helpers import create_mock_game, create_mock_player
 
 
 @pytest.fixture

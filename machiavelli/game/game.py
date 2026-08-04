@@ -10,6 +10,10 @@ from typing import Self
 
 from machiavelli.events import TurnEvent
 
+from .map import Map, MovementMode, Province, Sea
+from .scenario import Power, Scenario
+from .tables import GameTables
+
 
 class FailedToStartError(Exception):
     """La partida no puede arrancar porque faltan prerrequisitos."""

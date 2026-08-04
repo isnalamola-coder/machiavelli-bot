@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from .resources import read_package_json
+
 
 class MovementMode(StrEnum):
     LAND = "land"
@@ -111,12 +113,13 @@ class Map:
         exclude_set = set(exclude_ids) if exclude_ids else set()
 
         if json_path is None:
-            json_path = Path(__file__).parent / "map_data.json"
+            raw_data = read_package_json("map_data.json")
         else:
-            json_path = Path(json_path)
+            with Path(json_path).open(encoding="utf-8") as stream:
+                raw_data = json.load(stream)
 
-        with open(json_path, encoding="utf-8") as f:
-            raw_data = json.load(f)
+        if not isinstance(raw_data, dict):
+            raise TypeError("El recurso del mapa debe contener un objeto JSON")
 
         processed_provinces: dict[str, Province] = {}
         processed_seas: dict[str, Sea] = {}

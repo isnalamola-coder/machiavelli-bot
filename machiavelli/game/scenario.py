@@ -6,6 +6,8 @@ from typing import Self
 
 from machiavelli.game.tables import GameTables
 
+from .resources import read_package_json
+
 
 @dataclass
 class Power:
@@ -91,12 +93,13 @@ class Scenario:
     def load_scenarios(cls, json_path: Path | str | None = None) -> dict[str, Self]:
         """Lee el JSON de escenarios y los devuelve en un diccionario."""
         if json_path is None:
-            json_path = Path(__file__).parent / "scenarios.json"
+            data = read_package_json("scenarios.json")
         else:
-            json_path = Path(json_path)
+            with Path(json_path).open(encoding="utf-8") as stream:
+                data = json.load(stream)
 
-        with open(json_path, encoding="utf-8") as f:
-            data = json.load(f)
+        if not isinstance(data, dict):
+            raise TypeError("El recurso de escenarios debe contener un objeto JSON")
 
         sc_dict = {}
 
