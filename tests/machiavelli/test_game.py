@@ -184,24 +184,19 @@ def test_rebelled_city_recruitment_is_rejected_before_charging():
 # Tests on database functions
 
 
-def test_load_commands_orders_by_persisted_id():
-    """Exige que las filas de orden se carguen por su identificador persistido."""
+def test_load_commands_delegates_to_repository():
+    """La fachada histórica debe usar el repositorio canónico."""
     mock_conn = MagicMock(spec=sqlite3.Connection)
-    mock_cursor = MagicMock(spec=sqlite3.Cursor)
-    mock_conn.cursor.return_value = mock_cursor
-    mock_cursor.fetchall.return_value = []
+    game = Game("Persistida", database_id=42)
+    player = Player(game, "P1")
 
-    game = MagicMock(spec=Game)
-    game.database_id = 42
-    player = MagicMock(spec=Player)
-    player.player_id = "P1"
+    with patch(
+        "machiavelli.repositories.command_repository.CommandRepository.get_by_player",
+        return_value=[],
+    ) as get_by_player:
+        assert Command.load_commands(mock_conn, game, player) == []
 
-    assert Command.load_commands(mock_conn, game, player) == []
-    mock_cursor.execute.assert_called_once_with(
-        "SELECT actor, command, target FROM commands "
-        "WHERE game_id = ? AND player_id = ? ORDER BY commands.id ASC",
-        (42, "P1"),
-    )
+    get_by_player.assert_called_once_with(player)
 
 
 def test_command_order_survives_repeated_loads_and_save_round_trip():
@@ -272,95 +267,20 @@ def test_command_order_survives_repeated_loads_and_save_round_trip():
 
 
 # database on Player
-def test_load_players_success():
-    """Comprueba la consulta y las instancias devueltas por load_players."""
+def test_load_players_delegates_to_repository():
+    """La fachada histórica debe usar el repositorio canónico."""
     mock_conn = MagicMock(spec=sqlite3.Connection)
-    mock_cursor = MagicMock(spec=sqlite3.Cursor)
-    mock_conn.cursor.return_value = mock_cursor
+    game = Game("Persistida", database_id=42)
+    expected = [Player(game, "carlos_id", 1111), Player(game, "sofia_id")]
 
-    mock_game = MagicMock(spec=Game)
-    mock_game.database_id = 42
+    with patch(
+        "machiavelli.repositories.player_repository.PlayerRepository.get_by_game",
+        return_value=expected,
+    ) as get_by_game:
+        players = Player.load_players(mock_conn, game)
 
-    mock_cursor.fetchall.return_value = [
-        (
-            "carlos_id",
-            1111,
-            '["rome", "bari"]',
-            '["veron", "messi"]',
-            '["berga", "bolog"]',
-            '["venic", "bosni"]',
-            '["V", "L"]',
-            8,
-            '["flore"]',
-            '["pisa"]',
-            '["M"]',
-            "M",
-        ),
-        ("sofia_id", None, None, None, None, None, None, 0, None, None, None, None),
-    ]
-
-    players = Player.load_players(mock_conn, mock_game)
-
-    mock_cursor.execute.assert_has_calls(
-        [
-            call(
-                """
-            SELECT player_id, discord_id, controlled_locations, armies, fleets,
-                garrisons, ass_counters, ducats, rebelled_provinces,
-                rebelled_cities, home_countries, power
-            FROM players WHERE game_id = ?
-            """,
-                (42,),
-            ),
-            call(
-                "SELECT actor, command, target FROM commands "
-                "WHERE game_id = ? AND player_id = ? ORDER BY commands.id ASC",
-                (42, "carlos_id"),
-            ),
-            call(
-                "SELECT actor, command, target FROM commands "
-                "WHERE game_id = ? AND player_id = ? ORDER BY commands.id ASC",
-                (42, "sofia_id"),
-            ),
-        ]
-    )
-
-    assert len(players) == 2
-    assert isinstance(players[0], Player)
-    assert players[0].player_id == "carlos_id"
-    assert players[0].discord_id == 1111
-    assert len(players[0].controlled_locations) == 2
-    assert len(players[0].armies) == 2
-    assert len(players[0].fleets) == 2
-    assert len(players[0].garrisons) == 2
-    assert len(players[0].ass_counters) == 2
-    assert len(players[0].rebelled_provinces) == 1
-    assert len(players[0].rebelled_cities) == 1
-    assert len(players[0].home_countries) == 1
-    assert "rome" in players[0].controlled_locations
-    assert "messi" in players[0].armies
-    assert "berga" in players[0].fleets
-    assert "bosni" in players[0].garrisons
-    assert "V" in players[0].ass_counters
-    assert players[0].ducats == 8
-    assert "flore" in players[0].rebelled_provinces
-    assert "pisa" in players[0].rebelled_cities
-    assert "M" in players[0].home_countries
-    assert players[0].power == "M"
-
-    assert isinstance(players[1], Player)
-    assert players[1].player_id == "sofia_id"
-    assert players[1].discord_id is None
-    assert len(players[1].controlled_locations) == 0
-    assert len(players[1].armies) == 0
-    assert len(players[1].fleets) == 0
-    assert len(players[1].garrisons) == 0
-    assert len(players[1].ass_counters) == 0
-    assert len(players[1].rebelled_provinces) == 0
-    assert len(players[1].rebelled_cities) == 0
-    assert len(players[1].home_countries) == 0
-    assert players[1].ducats == 0
-    assert players[1].power is None
+    assert players is expected
+    get_by_game.assert_called_once_with(game)
 
 
 # database on Game

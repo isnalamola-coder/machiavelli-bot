@@ -34,19 +34,10 @@ class Command:
         return self.player.player_id
 
     def save(self, conn: sqlite3.Connection) -> None:
-        """Persist this command using the historical compatibility facade."""
-        conn.execute(
-            "INSERT INTO commands "
-            "(game_id, player_id, actor, command, target) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (
-                self.game_id,
-                self.player_id,
-                self.actor,
-                self.command,
-                self.target,
-            ),
-        )
+        """Persist this command through the repository compatibility facade."""
+        from machiavelli.repositories.command_repository import CommandRepository
+
+        CommandRepository(conn).save(self)
 
     @classmethod
     def load_commands(
@@ -55,23 +46,12 @@ class Command:
         game: Game,
         player: Player,
     ) -> list[Self]:
-        """Load a player's commands in their persisted relative order."""
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT actor, command, target FROM commands "
-            "WHERE game_id = ? AND player_id = ? ORDER BY commands.id ASC",
-            (game.database_id, player.player_id),
-        )
-        return [
-            cls(
-                game=game,
-                player=player,
-                actor=row[0],
-                command=row[1],
-                target=row[2],
-            )
-            for row in cursor.fetchall()
-        ]
+        """Load commands through the repository compatibility facade."""
+        from machiavelli.repositories.command_repository import CommandRepository
+
+        if player.game is not game:
+            raise ValueError("El jugador no pertenece a la partida indicada")
+        return CommandRepository(conn).get_by_player(player)
 
     def is_valid_expense(
         self,

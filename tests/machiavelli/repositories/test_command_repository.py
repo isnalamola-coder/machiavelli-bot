@@ -1,86 +1,62 @@
-# tests/machiavelli/repositories/test_command_repository.py
+"""Tests for canonical command persistence."""
+
 import sqlite3
 
 import pytest
 
 from machiavelli.db.database import _UPGRADES, DatabaseManager
 from machiavelli.game.command import Command
+from machiavelli.game.game import Game
+from machiavelli.game.player import Player
 from machiavelli.repositories.command_repository import CommandRepository
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def db_conn():
-    """Crea una base de datos SQLite en memoria con las migraciones aplicadas
-
-    sobre la misma conexión activa.
-    """
-    db_manager = DatabaseManager(":memory:")
-    conn = db_manager.get_connection()
-
-    # Aplicamos todas las migraciones en la conexión activa
-    cursor = conn.cursor()
+    manager = DatabaseManager(":memory:")
+    conn = manager.get_connection()
     for version, script in enumerate(_UPGRADES, start=1):
-        cursor.executescript(script)
-        cursor.execute(f"PRAGMA user_version = {version};")
+        conn.executescript(script)
+        conn.execute(f"PRAGMA user_version = {version}")
     conn.commit()
-
     yield conn
     conn.close()
 
 
 @pytest.fixture
-def repo(db_conn: sqlite3.Connection):
-    """Instancia del repositorio para cada test."""
-    return CommandRepository(db_conn)
-
-
-@pytest.fixture
-def setup_game_and_players(db_conn: sqlite3.Connection):
-    """Inserta registros ficticios en 'games' y 'players' para respetar Foreign Keys."""
-    cursor = db_conn.cursor()
-
-    # Insertar partida de prueba (id = 1)
-    cursor.execute(
+def domain(db_conn: sqlite3.Connection) -> tuple[Game, Player, Player]:
+    db_conn.execute(
         "INSERT INTO games (id, name, channel_id) VALUES (?, ?, ?)",
         (1, "Partida Test", 1001),
     )
-
-    # Insertar jugadores de prueba
-    cursor.execute(
+    db_conn.executemany(
         "INSERT INTO players (game_id, player_id, discord_id) VALUES (?, ?, ?)",
-        (1, "p1", 2001),
+        ((1, "p1", 2001), (1, "p2", 2002)),
     )
-    cursor.execute(
-        "INSERT INTO players (game_id, player_id, discord_id) VALUES (?, ?, ?)",
-        (1, "p2", 2002),
-    )
-
     db_conn.commit()
 
-
-# ---------------------------------------------------------------------------
-# Tests: Operaciones CRUD
-# ---------------------------------------------------------------------------
+    game = Game(name="Partida Test", channel_id=1001, database_id=1)
+    return game, Player(game, "p1", 2001), Player(game, "p2", 2002)
 
 
-def test_save_and_get_by_player(repo: CommandRepository, setup_game_and_players):
-    """Verifica que un comando guardado individualmente se recupera correctamente."""
-    cmd = Command(
-        game_id=1,
-        player_id="p1",
-        actor="A milan",
-        command="A",
-        target="venic",
-    )
+@pytest.fixture
+def repo(db_conn: sqlite3.Connection) -> CommandRepository:
+    return CommandRepository(db_conn)
 
-    repo.save(cmd)
-    retrieved = repo.get_by_player(game_id=1, player_id="p1")
+
+def test_save_and_get_by_player(
+    repo: CommandRepository,
+    domain: tuple[Game, Player, Player],
+) -> None:
+    game, player, _ = domain
+    command = Command(game, player, "A milan", "A", "venic")
+
+    repo.save(command)
+    retrieved = repo.get_by_player(player)
 
     assert len(retrieved) == 1
+    assert retrieved[0].game is game
+    assert retrieved[0].player is player
     assert retrieved[0].game_id == 1
     assert retrieved[0].player_id == "p1"
     assert retrieved[0].actor == "A milan"
@@ -88,67 +64,103 @@ def test_save_and_get_by_player(repo: CommandRepository, setup_game_and_players)
     assert retrieved[0].target == "venic"
 
 
-def test_save_many(repo: CommandRepository, setup_game_and_players):
-    """Verifica que se pueden guardar múltiples órdenes en lote."""
-    commands = [
-        Command(
-            game_id=1, player_id="p1", actor="A milan", command="A", target="venic"
-        ),
-        Command(game_id=1, player_id="p1", actor="F UA", command="H", target=""),
-        Command(game_id=1, player_id="p1", actor="E B", command="12", target="flore"),
+def test_save_many_preserves_order_and_none_target(
+    repo: CommandRepository,
+    domain: tuple[Game, Player, Player],
+) -> None:
+    game, player, _ = domain
+    commands = (
+        Command(game, player, "A milan", "A", "venic"),
+        Command(game, player, "F UA", "H", None),
+        Command(game, player, "E B", "12", "flore"),
+    )
+
+    repo.save_many(command for command in commands)
+    retrieved = repo.get_by_player(player)
+
+    assert [(item.actor, item.target) for item in retrieved] == [
+        ("A milan", "venic"),
+        ("F UA", None),
+        ("E B", "flore"),
     ]
 
-    repo.save_many(commands)
-    retrieved = repo.get_by_player(game_id=1, player_id="p1")
 
-    assert len(retrieved) == 3
-    assert [c.actor for c in retrieved] == ["A milan", "F UA", "E B"]
-
-
-def test_get_by_player_isolation(repo: CommandRepository, setup_game_and_players):
-    """Verifica que recuperar comandos de un jugador no devuelve los de otros."""
-    cmd_p1 = Command(
-        game_id=1, player_id="p1", actor="A milan", command="A", target="venic"
+def test_interleaved_players_keep_their_relative_order(
+    repo: CommandRepository,
+    domain: tuple[Game, Player, Player],
+) -> None:
+    game, player_one, player_two = domain
+    repo.save_many(
+        [
+            Command(game, player_one, "A one", "A", "first"),
+            Command(game, player_two, "A two", "A", "other"),
+            Command(game, player_one, "A one", "A", "second"),
+            Command(game, player_two, "A two", "H", None),
+            Command(game, player_one, "A one", "A", "third"),
+        ]
     )
-    cmd_p2 = Command(game_id=1, player_id="p2", actor="F UA", command="H", target="")
 
-    repo.save_many([cmd_p1, cmd_p2])
+    first_load = repo.get_by_player(player_one)
+    second_load = repo.get_by_player(player_one)
 
-    p1_orders = repo.get_by_player(game_id=1, player_id="p1")
-    p2_orders = repo.get_by_player(game_id=1, player_id="p2")
-
-    assert len(p1_orders) == 1
-    assert p1_orders[0].actor == "A milan"
-
-    assert len(p2_orders) == 1
-    assert p2_orders[0].actor == "F UA"
+    assert [command.target for command in first_load] == ["first", "second", "third"]
+    assert [command.target for command in second_load] == ["first", "second", "third"]
+    assert [command.target for command in repo.get_by_player(player_two)] == [
+        "other",
+        None,
+    ]
 
 
-def test_delete_by_player(repo: CommandRepository, setup_game_and_players):
-    """Verifica que borra las órdenes de un jugador sin borrar las de otros."""
-    cmd_p1 = Command(
-        game_id=1, player_id="p1", actor="A milan", command="A", target="venic"
+def test_delete_by_player_is_isolated(
+    repo: CommandRepository,
+    domain: tuple[Game, Player, Player],
+) -> None:
+    game, player_one, player_two = domain
+    repo.save_many(
+        [
+            Command(game, player_one, "A milan", "A", "venic"),
+            Command(game, player_two, "F UA", "H", None),
+        ]
     )
-    cmd_p2 = Command(game_id=1, player_id="p2", actor="F UA", command="H", target="")
 
-    repo.save_many([cmd_p1, cmd_p2])
+    repo.delete_by_player(player_one)
 
-    # Borramos únicamente las órdenes de p1
-    repo.delete_by_player(game_id=1, player_id="p1")
-
-    assert len(repo.get_by_player(game_id=1, player_id="p1")) == 0
-    assert len(repo.get_by_player(game_id=1, player_id="p2")) == 1
+    assert repo.get_by_player(player_one) == []
+    assert len(repo.get_by_player(player_two)) == 1
 
 
-def test_foreign_key_constraint(repo: CommandRepository):
-    """Sin ejecutar setup_game_and_players, guardar un comando falla por la FK."""
-    cmd = Command(
-        game_id=999,  # No existe en 'games'
-        player_id="non_existent",  # No existe en 'players'
-        actor="A milan",
-        command="A",
-        target="venic",
-    )
+def test_foreign_key_constraint(repo: CommandRepository) -> None:
+    game = Game(name="Ausente", database_id=999)
+    player = Player(game, "non-existent")
+    command = Command(game, player, "A milan", "A", "venic")
 
     with pytest.raises(sqlite3.IntegrityError):
-        repo.save(cmd)
+        repo.save(command)
+
+
+def test_save_many_rolls_back_every_row_on_error(
+    repo: CommandRepository,
+    db_conn: sqlite3.Connection,
+    domain: tuple[Game, Player, Player],
+) -> None:
+    game, player, _ = domain
+    valid = Command(game, player, "A milan", "H", None)
+    invalid = Command(game, player, None, "H", None)  # type: ignore[arg-type]
+
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.save_many([valid, invalid])
+
+    count = db_conn.execute("SELECT COUNT(*) FROM commands").fetchone()[0]
+    assert count == 0
+
+
+def test_rejects_command_bound_to_a_different_game(
+    repo: CommandRepository,
+    domain: tuple[Game, Player, Player],
+) -> None:
+    game, player, _ = domain
+    other_game = Game(name="Otra", database_id=2)
+    command = Command(other_game, player, "A milan", "H", None)
+
+    with pytest.raises(ValueError, match="partidas distintas"):
+        repo.save(command)
