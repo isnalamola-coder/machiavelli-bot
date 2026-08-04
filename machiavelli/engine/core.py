@@ -16,6 +16,8 @@ from .exceptions import (
     TurnExecutionFailed,
 )
 from .expenditure import ExpenditureProcessor
+from .income import IncomeManager
+from .maintenance import MaintenanceResolver
 from .military import DislodgementResolver, MilitaryResolver
 from .rebellions import RebellionManager
 from .setup import SetupManager
@@ -37,6 +39,12 @@ class GameEngine:
 
     def run_startup(self) -> None:
         """Ejecutamos el flujo completo del inicio de la partida."""
+        # El inicio de la partida consta de dos partes.
+        #
+        # 1. En primer lugar, el Setup de la partida. Comprueba que la partida esté
+        #   lista para comenzar, sortea las facciones entre los jugadores y establece
+        #   la posición y recursos iniciales.
+        # 2. Se ejecuta el inicio de la primavera. La aparición de hambre y los ingresos
         try:
             SetupManager(self.game, self.rng).run()
         except (
@@ -49,9 +57,13 @@ class GameEngine:
                 f"Fallo en la inicialización de la partida: {e}"
             ) from e
 
+        # Una vez arrancada la partida, corremos las primeras fases
+        DisastersManager(self.game).spawn_famine()
+        IncomeManager(self.game).run()
+
     def run_maintenance(self) -> None:
         """Execute the established maintenance rules through the game domain."""
-        self.game.spring_maintenance()
+        MaintenanceResolver(self.game).run()
 
     def run_campaign(self) -> None:
         """Ejecutamos el flujo completo de turno de campaña."""
@@ -80,8 +92,10 @@ class GameEngine:
         # 6. Se recalcula el control de provincias y países natales, y se comprueban
         #   las condiciones de victoria.
         # 7. Cambio de estación (solo evento)
-        # 8. Se elimina el hambre (solo inicio de verano, season==2)
-        # 9. Se resuelve la plaga (solo inicio de verano, season==2)
+        # 8. Se inicia el hambre (solo inicio de primavera, season==0)
+        # 9. Se calculan los ingresos (solo inicio de primavera, season==0)
+        # 10. Se elimina el hambre (solo inicio de verano, season==2)
+        # 11. Se resuelve la plaga (solo inicio de verano, season==2)
         disaster_manager = DisastersManager(self.game)  # Lo usaremos varias veces
         self.game.turn_events = []  # Vaciamos los eventos al comenzar
 
@@ -97,6 +111,9 @@ class GameEngine:
         if season == 2:
             disaster_manager.resolve_famine_attrition()
         ControlManager(self.game).run()
+        if season == 0:
+            disaster_manager.spawn_famine()
+            IncomeManager(self.game).run()
         if season == 2:
             disaster_manager.clear_famine()
             disaster_manager.spawn_plague()

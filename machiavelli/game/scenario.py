@@ -54,6 +54,7 @@ class Rules:
     fortress_active: bool = True
     assassinations_active: bool = True
     famine_active: bool = True
+    first_turn_famine: bool = True
     plague_active: bool = True
 
 

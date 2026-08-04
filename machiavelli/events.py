@@ -14,6 +14,12 @@ class EventType(StrEnum):
     # Inicio de partida
     START_GAME_POWER_ASSIGNED = "start_game_power_assigned"
 
+    # Ingresos
+    PLAYER_INCOME = "player_income"
+
+    # Mantenimiento
+    PLAYER_MAINTENANCE = "player_maintenance"
+
     # Desastres
     FAMINE_SPAWN = "famine_spawn"
     FAMINE_ATTRITION = "famine_attrition"

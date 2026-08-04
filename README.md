@@ -153,7 +153,7 @@ Se prevén las siguientes versiones
 ### Versión 0.6.0
 
 - [ ] Ampliación de GameEngine para soportar las operaciones que los jugadores vayan incorporando a sus órdenes.
-  - [ ] SetupManager, para el setup inicial de la partida (antes en Game)
+  - [X] SetupManager, para el setup inicial de la partida (antes en Game)
 - [ ] Reescritura y refactorización de prácticamente todo el código.
   - [X] Creación del package db, para la gestión de la base de datos.
   - [ ] Creación del package repositories, encargado de la persistencia de los elementos del juego.

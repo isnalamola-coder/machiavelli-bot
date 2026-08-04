@@ -114,21 +114,6 @@ class Player:
             if province not in provinces
         ]
 
-    def set_default_commands(self) -> None:
-        """Add maintenance orders for units that do not have one yet."""
-        actors = {command.actor for command in self.commands}
-        for unit_type, locations in (
-            ("A", self.armies),
-            ("F", self.fleets),
-            ("G", self.garrisons),
-        ):
-            for location in locations:
-                actor = f"{unit_type} {location}"
-                if actor not in actors:
-                    self.commands.append(
-                        Command(self.game, self, actor, "M", target=None)
-                    )
-
     def save(self, conn: sqlite3.Connection) -> None:
         """Persist the player through the repository compatibility facade."""
         from machiavelli.repositories.player_repository import PlayerRepository

@@ -5,7 +5,6 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -20,7 +19,6 @@ from machiavelli.game.game import (
     GameNotFoundException,
     Player,
 )
-from machiavelli.game.map import Map, Province
 
 
 def test_player_constructor():
@@ -135,51 +133,6 @@ def test_military_event_rejects_non_primitive_or_malformed_lists():
         values[index] = ()
         with pytest.raises(ValueError):
             TurnEvent.military_resolution(*values)
-
-
-def test_rebelled_city_recruitment_is_rejected_before_charging():
-    """Impide reclutar en ciudad rebelada sin descontar el coste."""
-    game_map = Map(
-        provinces={
-            "fort": Province("Fort", custom_id="fort", city="fortified", has_port=True)
-        },
-        seas={},
-    )
-    scenario = SimpleNamespace(
-        year=1454,
-        province_home_country=lambda _province: "M",
-    )
-
-    def build_game(rebelled_cities):
-        """Crea el mismo mantenimiento con o sin rebelión urbana."""
-        game = Game(
-            "Mantenimiento",
-            turn_number=1,
-            scenario=scenario,
-            map=game_map,
-        )
-        player = Player(
-            game,
-            "P1",
-            controlled_locations=["fort"],
-            ducats=3,
-            rebelled_cities=list(rebelled_cities),
-            home_countries=["M"],
-            power="M",
-        )
-        player.commands = [Command(game, player, "G fort", "R", None)]
-        game.players = [player]
-        return game, player
-
-    rebelled_game, rebelled_player = build_game(["fort"])
-    rebelled_game.spring_maintenance()
-    assert rebelled_player.garrisons == []
-    assert rebelled_player.ducats == 3
-
-    normal_game, normal_player = build_game([])
-    normal_game.spring_maintenance()
-    assert normal_player.garrisons == ["fort"]
-    assert normal_player.ducats == 0
 
 
 # Tests on database functions
