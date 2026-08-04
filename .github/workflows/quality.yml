@@ -34,6 +34,9 @@ jobs:
       - name: Verify dependencies
         run: python -m pip check
 
+      - name: Compile source and tests
+        run: python -m compileall -q machiavelli tests
+
       - name: Check formatting
         run: python -m ruff format --check .
 
@@ -53,6 +56,15 @@ jobs:
       - name: Build distributions
         run: python -m build
 
+      - name: Verify wheel contents
+        run: >-
+          python -c "from pathlib import Path;
+          import os, zipfile;
+          wheel = next(Path('dist').glob('*.whl'));
+          os.environ['MACHIAVELLI_WHEEL'] = str(wheel.resolve());
+          import pytest;
+          raise SystemExit(pytest.main(['-q', 'tests/machiavelli/test_distribution_contents.py']))"
+
       - name: Install built wheel
         run: >-
           python -c "from pathlib import Path;
@@ -60,15 +72,19 @@ jobs:
           wheel = next(Path('dist').glob('*.whl'));
           subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', str(wheel)])"
 
-      - name: Smoke-test installed package
+      - name: Verify installed metadata and smoke-test package
         run: >-
           python -c "import os, tempfile;
           os.chdir(tempfile.gettempdir());
+          from importlib.metadata import version;
           import machiavelli;
           from machiavelli.engine import GameEngine;
           from machiavelli.game import Command, Game, Player;
           from machiavelli.game.map import Map;
           from machiavelli.game.scenario import Scenario;
+          assert machiavelli.__version__ == version('machiavelli');
+          assert machiavelli.__version__ == '0.5.0.dev0';
+          assert 'site-packages' in machiavelli.__file__.lower();
           assert Map.load_map().provinces;
           assert Scenario.load_scenarios();
-          print(machiavelli, GameEngine, Game, Player, Command)"
+          print(machiavelli.__file__, machiavelli.__version__, GameEngine, Game, Player, Command)"
