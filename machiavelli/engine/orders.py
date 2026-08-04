@@ -1,32 +1,32 @@
-# machiavelli/engine/orders.py
+"""Order submission and replacement rules."""
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from machiavelli.game.command import Command
-    from machiavelli.game.player import Player
-
-from machiavelli.engine.exceptions import (
-    TooManyExpenses,
-)
+from machiavelli.engine.exceptions import TooManyExpenses
 from machiavelli.game.map import MovementMode, Province
 from machiavelli.game.player import TurnType
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from machiavelli.game.command import Command
+    from machiavelli.game.game import Game
+    from machiavelli.game.player import Player
 
 
 class OrderProcessor:
-    """Gestiona la validación y registro de órdenes según el tipo de turno."""
+    """Validate and register orders according to the active turn type."""
 
-    def __init__(self, game):
+    def __init__(self, game: Game) -> None:
         self.game = game
 
     def process_command(
-        self, player: Player, turn_type: TurnType, command: Command
+        self,
+        player: Player,
+        turn_type: TurnType,
+        command: Command,
     ) -> list[str]:
+        """Register one order and return its user-facing report in stable order."""
         report = [f"Orden `{command}` enviada."]
 
         if turn_type == TurnType.MAINTENANCE:
@@ -35,128 +35,140 @@ class OrderProcessor:
             report.extend(self._handle_campaign_command(player, command))
 
         report.append("**Órdenes recibidas hasta ahora:**")
-        for c in player.commands:
-            report.append(f"`{c}`")
-
+        report.extend(f"`{registered}`" for registered in player.commands)
         return report
 
-    def _handle_maintenance_command(self, player: Player, command: Command) -> None:
-        """Valida y registra un comando de mantenimiento.
-
-        Las órdenes imposibles o ilegales se registran también (por ejemplo, crear una
-        guarnición allí dónde no haya ciudad fortificada, una flota en provincia de
-        interior, etc). Se validan simplemente a nivel sintático.
-
-        Lo que sí se hace es mantener una única orden por unidad, de forma que una
-        segunda orden para una unidad sustituye la anterior, si la hubiera.
-
-        Args:
-            player (Player): Jugador que da las órdenes.
-            command (Command): Orden a agregar.
-        """
-        current_cmd = [c for c in player.commands if c.actor == command.actor]
-
-        if current_cmd:
-            # La unidad ya tenía una orden, la sustituyo
-            if len(current_cmd) > 1:
-                # Si hay más de uno, lanzo un warning y borro los demás
-                logger.warning(
-                    "Múltiples comandos para el actor '%s'. "
-                    "Eliminando los comandos sobrantes.",
-                    command.actor,
-                )
-                for cmd in current_cmd[1:]:
-                    player.commands.remove(cmd)
-
-            current_cmd[0].command = command.command
-            current_cmd[0].target = command.target
-
-            actor_type, actor_id = command.actor.split()
-            is_new_unit = (
-                (actor_type == "A" and actor_id not in player.armies)
-                or (actor_type == "F" and actor_id not in player.fleets)
-                or (actor_type == "G" and actor_id not in player.garrisons)
+    def _handle_maintenance_command(
+        self,
+        player: Player,
+        command: Command,
+    ) -> list[str]:
+        """Register a maintenance order, keeping at most one row per actor."""
+        current_commands = [
+            current for current in player.commands if current.actor == command.actor
+        ]
+        if len(current_commands) > 1:
+            raise ValueError(
+                f"Se encontraron múltiples comandos para el actor '{command.actor}'"
             )
 
-            # Si se trata de una nueva unidad y mando "D"esbandar, borro la orden
-            if is_new_unit and command.command == "D":
-                player.commands.remove(current_cmd[0])
-        else:
-            # Añade el nuevo comando
-            player.add_command(command)
+        if not current_commands:
+            # A disband order only has meaning when it replaces the default order of a
+            # newly created unit. The historical implementation ignored a standalone D.
+            if command.command != "D":
+                player.add_command(command)
+            return []
 
-    def _handle_campaign_command(self, player: Player, command: Command) -> None:
-        """Valida y registra un comando de campaña.
+        current = current_commands[0]
+        messages = [f"Sustituye la orden anterior `{current}`."]
+        current.command = command.command
+        current.target = command.target
 
-        Las órdenes imposibles o ilegales se registran también (por ejemplo, avanzar a
-        una provincia no adyacente, o convertir una unidad en una provincia que no
-        tenga ciudad fortificada, etc). Se validan simplemente a nivel sintáctico.
-
-        Sin embargo sí se hace alguna comprobación:
-        - Las órdenes de gasto (expense)"""
         actor_type, actor_id = command.actor.split()
+        is_new_unit = (
+            (actor_type == "A" and actor_id not in player.armies)
+            or (actor_type == "F" and actor_id not in player.fleets)
+            or (actor_type == "G" and actor_id not in player.garrisons)
+        )
+        if is_new_unit and command.command == "D":
+            player.remove_command(current)
 
+        return messages
+
+    def _handle_campaign_command(
+        self,
+        player: Player,
+        command: Command,
+    ) -> list[str]:
+        """Register a campaign order, expense update, or convoy segment."""
+        actor_type, _actor_id = command.actor.split()
         if actor_type == "E":
-            expense = next(
-                (
-                    c
-                    for c in player.commands
-                    if c.actor == command.actor and c.target == command.target
-                ),
-                None,
-            )
-            if expense:
-                if int(command.command) == 0:
-                    player.remove_command(expense)
-                else:
-                    expense.command = command.command
-            else:
-                expense_count = sum(c.actor.startswith("E ") for c in player.commands)
-                if expense_count >= 4:
-                    raise TooManyExpenses(
-                        message="Solo se permiten hasta cuatro gastos por campaña"
-                    )
-                player.add_command(command)
-        else:
-            cmds = [c for c in player.commands if c.actor == command.actor]
-            if cmds:
-                is_convoy = self._validate_convoy(player, command, actor_type, cmds)
-                if is_convoy:
-                    player.add_command(command)
-                else:
-                    for c in cmds:
-                        player.remove_command(c)
-                    player.add_command(command)
-            else:
-                player.add_command(command)
+            return self._handle_expense_command(player, command)
+
+        current_commands = [
+            current for current in player.commands if current.actor == command.actor
+        ]
+        if not current_commands:
+            player.add_command(command)
+            return []
+
+        if self._validate_convoy(player, command, actor_type, current_commands):
+            player.add_command(command)
+            return []
+
+        messages = [
+            f"Sustituye la orden anterior `{current}`." for current in current_commands
+        ]
+        for current in current_commands:
+            player.remove_command(current)
+        player.add_command(command)
+        return messages
+
+    def _handle_expense_command(
+        self,
+        player: Player,
+        command: Command,
+    ) -> list[str]:
+        """Create, update, or remove one campaign expense."""
+        expense = next(
+            (
+                current
+                for current in player.commands
+                if current.actor == command.actor and current.target == command.target
+            ),
+            None,
+        )
+        if expense is not None:
+            if int(command.command) == 0:
+                message = f"Elimina el gasto anterior `{expense}`."
+                player.remove_command(expense)
+                return [message]
+
+            message = f"Sustituye la orden anterior `{expense}`."
+            expense.command = command.command
+            return [message]
+
+        expense_count = sum(
+            current.actor.startswith("E ") for current in player.commands
+        )
+        if expense_count >= 4:
+            raise TooManyExpenses()
+
+        player.add_command(command)
+        return []
 
     def _validate_convoy(
-        self, player: Player, command: Command, actor_type: str, cmds: list
+        self,
+        player: Player,
+        command: Command,
+        actor_type: str,
+        current_commands: list[Command],
     ) -> bool:
-        """Extrae la lógica compleja de convoyes fuera del modelo de datos."""
-        if actor_type != "A" or command.command != "A":
+        """Return whether ``command`` extends a syntactically valid convoy route."""
+        if actor_type != "A" or command.command != "A" or command.target is None:
             return False
 
         locations = self.game.map.provinces | self.game.map.seas
-        fleets = [f for p in self.game.players for f in p.fleets]
+        fleets = [fleet for owner in self.game.players for fleet in owner.fleets]
         convoy = [
-            c.target
-            for c in player.commands
-            if c.actor == command.actor and c.command == "A"
+            current.target
+            for current in player.commands
+            if current.actor == command.actor and current.command == "A"
         ]
 
-        if len(convoy) == len(cmds):
-            for c in convoy:
-                if c not in fleets:
-                    break
-            else:
-                last_place = convoy[-1]
-                destination = locations.get(command.target)
-                if (
-                    last_place in fleets
-                    and command.target
-                    in self.game.map.adjacent_locations(last_place, MovementMode.BOTH)
-                    and (command.target in fleets or isinstance(destination, Province))
-                ):
-                    return True
-        return False
+        if len(convoy) != len(current_commands):
+            return False
+        if not all(location in fleets for location in convoy):
+            return False
+
+        last_place = convoy[-1]
+        if last_place is None:
+            return False
+
+        destination = locations.get(command.target)
+        return (
+            last_place in fleets
+            and command.target
+            in self.game.map.adjacent_locations(last_place, MovementMode.BOTH)
+            and (command.target in fleets or isinstance(destination, Province))
+        )
