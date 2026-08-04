@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from machiavelli import database
+from machiavelli.db import database as canonical_database
 from machiavelli.game.command import Command
 from machiavelli.game.game import Game
 from machiavelli.repositories.game_repository import GameRepository
@@ -107,5 +108,5 @@ def test_temporary_database_survives_orders_turn_and_repeated_reloads() -> None:
 
             assert _state(reloaded) == completed_state
             assert conn.execute("PRAGMA user_version").fetchone() == (
-                database._SCHEMA_VERSION,
+                canonical_database._SCHEMA_VERSION,
             )

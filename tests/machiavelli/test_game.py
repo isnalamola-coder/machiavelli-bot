@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from machiavelli import database
+from machiavelli.db import database as canonical_database
 from machiavelli.events import EventType, TurnEvent
 from machiavelli.game.command import Command
 from machiavelli.game.game import (
@@ -224,8 +225,8 @@ def test_command_order_survives_repeated_loads_and_save_round_trip():
         ),
     }
 
-    assert database._SCHEMA_VERSION == 3
-    assert len(database._UPGRADES) == 3
+    assert canonical_database._SCHEMA_VERSION == 3
+    assert len(canonical_database._UPGRADES) == 3
 
     with TemporaryDirectory() as directory:
         db_path = Path(directory) / "commands.db"
