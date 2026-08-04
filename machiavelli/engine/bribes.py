@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from ..events import EventType, TurnEvent
 from ..game.game import Command, Game, Player
-from ..game.map import MovementMode
+from ..game.map import Map, MovementMode
 from ..game.tables import GameTables
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,13 @@ class BribeResolver:
 
     # Funciones auxiliares
 
+    def _map(self) -> Map:
+        """Devuelve el mapa activo conservando la interfaz histórica de Game."""
+        game_map = self.game.map
+        if game_map is None:
+            raise RuntimeError("La partida requiere un mapa cargado")
+        return game_map
+
     def _check_adjacent(self, player: Player, target: str) -> bool:
         """Comprueba si el jugador tiene alguna unidad adyacente al objetivo.
 
@@ -51,7 +58,7 @@ class BribeResolver:
         Returns:
             bool: True si player tiene alguna unidad adyacente, False en caso contrario.
         """
-        adj_locations = self.game.map.adjacent_locations(
+        adj_locations = self._map().adjacent_locations(
             origin=target, mode=MovementMode.BOTH
         )
 
@@ -65,13 +72,18 @@ class BribeResolver:
     def expense_counterbribe(self, player: Player, command: Command) -> None:
         """Contra-soborno."""
         # El contrasoborno no exige adyacencia
-        value = self.counterbribes.get(command.target, 0)
+        target = command.target
+        if target is None:
+            return
+        value = self.counterbribes.get(target, 0)
         if int(command.command) > value:
-            self.counterbribes[command.target] = int(command.command)
+            self.counterbribes[target] = int(command.command)
 
     def expense_bribe(self, player: Player, command: Command) -> None:
         """Procesa la orden de soborno de un jugador."""
         # Parseo del objetivo
+        if command.target is None:
+            return
         try:
             parts = command.target.split(maxsplit=1)
             target_type = parts[0]
@@ -141,12 +153,16 @@ class BribeResolver:
         self.game.add_event(
             TurnEvent.expense(
                 EventType.BRIBE_EXECUTED,
-                actor=bribe.actor,
+                actor=bribe.actor.player_id,
                 expense_type=bribe.command,
                 target=bribe.target,
                 amount=bribe.amount,
             ),
         )
+
+        owner = bribe.owner
+        if bribe.command in {"I", "J", "K"} and owner is None:
+            raise ValueError("El soborno requiere una unidad con propietario")
 
         if bribe.command == "G":
             # Desbandar guarnición autónoma
@@ -157,26 +173,34 @@ class BribeResolver:
             bribe.actor.garrisons.append(target_key)
         elif bribe.command == "I":
             # Convertir guarnición en autónoma
-            bribe.owner.garrisons.remove(target_key)
+            if owner is None:
+                raise ValueError("La guarnición sobornada no tiene propietario")
+            owner.garrisons.remove(target_key)
             self.game.independent_garrisons.append(target_key)
         elif bribe.command == "J":
             # Desbandar unidad
+            if owner is None:
+                raise ValueError("La unidad sobornada no tiene propietario")
             if target_type == "G":
-                bribe.owner.garrisons.remove(target_key)
+                owner.garrisons.remove(target_key)
             elif target_type == "A":
-                bribe.owner.armies.remove(target_key)
+                owner.armies.remove(target_key)
             elif target_type == "F":
-                bribe.owner.fleets = [
-                    f for f in bribe.owner.fleets if f.split()[0] != target_key
+                owner.fleets = [
+                    fleet for fleet in owner.fleets if fleet.split()[0] != target_key
                 ]
         elif bribe.command == "K":
             # Comprar ejército o flota
+            if owner is None:
+                raise ValueError("La unidad sobornada no tiene propietario")
             if target_type == "A":
-                bribe.owner.armies.remove(target_key)
+                owner.armies.remove(target_key)
                 bribe.actor.armies.append(target_key)
             elif target_type == "F":
-                fleet = [f for f in bribe.owner.fleets if f.split()[0] == target_key][0]
-                bribe.owner.fleets.remove(fleet)
+                fleet = [
+                    fleet for fleet in owner.fleets if fleet.split()[0] == target_key
+                ][0]
+                owner.fleets.remove(fleet)
                 bribe.actor.fleets.append(fleet)
 
     def resolve_bribes(self) -> None:
@@ -210,7 +234,7 @@ class BribeResolver:
             # Los sobornos que afectan a guarniciones de ciudades mayores se doblan
             target_type, target_location = target.split(maxsplit=1)
             target_id = target_location.split()[0]
-            is_major = (self.game.map.provinces[target_id].major_city or 0) > 1
+            is_major = (self._map().provinces[target_id].major_city or 0) > 1
 
             if target_type == "G" and is_major:
                 cost *= 2

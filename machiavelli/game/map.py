@@ -84,7 +84,10 @@ class Sea(Location):
         )
 
 
-def _parse_routes(routes_raw: list[dict], exclude_set: set[str]) -> list[Route]:
+def _parse_routes(
+    routes_raw: list[dict[str, str]],
+    exclude_set: set[str],
+) -> list[Route]:
     """Helper interno para instanciar solo rutas hacia destinos no excluidos."""
     return [
         Route(destination=r["destination"], strait=r.get("strait"))

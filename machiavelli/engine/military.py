@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 
 from ..events import TurnEvent
+from ..game.command import Command
 from ..game.game import Game
-from ..game.map import MovementMode
+from ..game.map import Map, MovementMode
 from ..game.player import Player
 
 type ResolutionValue = str | int | bool | None | tuple[ResolutionValue, ...]
@@ -142,6 +143,16 @@ class MilitaryResolver:
         self.invalid_orders: dict[UnitKey, str] = {}
         self._broken_convoys: set[UnitKey] = set()
 
+    @property
+    def map(self) -> Map:
+        """Return the map required by every military resolution."""
+        return self.game.require_map()
+
+    def _player_power(self, key: UnitKey) -> str | None:
+        """Return the controlling power for a unit, if it has an owner."""
+        player = self.units_by_key[key].player
+        return player.power if player is not None else None
+
     def _build_unit_index(self) -> None:
         """Captura y valida el snapshot antes de leer cualquier orden."""
         self.units_by_key.clear()
@@ -221,7 +232,7 @@ class MilitaryResolver:
                 ("city", player.rebelled_cities),
             ):
                 for location in sorted(locations):
-                    province = self.game.map.provinces.get(location)
+                    province = self.map.provinces.get(location)
                     if province is None:
                         raise InvalidMilitaryState(
                             f"Localización de rebelión inválida: {location}"
@@ -245,7 +256,7 @@ class MilitaryResolver:
         """Convierte filas existentes en una intención por unidad, sin ejecutarlas."""
         self.orders_by_unit.clear()
         self.invalid_orders.clear()
-        rows: dict[UnitKey, list[object]] = {key: [] for key in self.units_by_key}
+        rows: dict[UnitKey, list[Command]] = {key: [] for key in self.units_by_key}
         for player in self.game.players:
             for command in player.commands:
                 key = self.actor_to_unit.get((player.player_id, command.actor))
@@ -264,11 +275,17 @@ class MilitaryResolver:
                 self._invalid_order(key, "combinación de órdenes inválida")
                 continue
             if len(commands) > 1:
+                targets = [
+                    command.target for command in commands if command.target is not None
+                ]
+                if len(targets) != len(commands):
+                    self._invalid_order(key, "ruta de convoy incompleta")
+                    continue
                 self.orders_by_unit[key] = MilitaryOrder(
                     key,
                     "A",
-                    target_location=commands[-1].target,
-                    path=(key.origin, *(command.target for command in commands)),
+                    target_location=targets[-1],
+                    path=(key.origin, *targets),
                     is_convoy=True,
                 )
                 continue
@@ -281,7 +298,9 @@ class MilitaryResolver:
                 key,
                 order_type,
                 target_location=command.target,
-                path=(key.origin, command.target) if order_type == "A" else (),
+                path=(key.origin, command.target)
+                if order_type == "A" and command.target is not None
+                else (),
             )
 
     def _link_and_validate_orders(self) -> None:
@@ -302,12 +321,12 @@ class MilitaryResolver:
             if not order.is_convoy:
                 continue
             destination = order.path[-1]
-            if destination not in self.game.map.provinces:
+            if destination not in self.map.provinces:
                 self._invalid_order(key, "destino de convoy inválido")
                 continue
             transporters: list[UnitKey] = []
             for origin, target in zip(order.path[:-1], order.path[1:], strict=True):
-                if target not in self.game.map.adjacent_locations(origin):
+                if target not in self.map.adjacent_locations(origin):
                     self._invalid_order(key, "tramo de convoy no adyacente")
                     break
             else:
@@ -315,10 +334,12 @@ class MilitaryResolver:
                     fleet = self.fleet_by_conflict_location.get(
                         conflict_location(location, "F")
                     )
+                    if fleet is None:
+                        self._invalid_order(key, "transportadora de convoy inválida")
+                        break
                     transport = self.orders_by_unit.get(fleet)
                     if (
-                        fleet is None
-                        or transport is None
+                        transport is None
                         or transport.order_type != "T"
                         or transport.transported_army != key
                     ):
@@ -356,9 +377,9 @@ class MilitaryResolver:
             if key.unit_type == "G" or not self._location_exists(target):
                 return "avance inválido"
             mode = MovementMode.LAND if key.unit_type == "A" else MovementMode.SEA
-            if target not in self.game.map.adjacent_locations(key.origin, mode):
+            if target not in self.map.adjacent_locations(key.origin, mode):
                 return "avance no adyacente"
-            if key.unit_type == "A" and target not in self.game.map.provinces:
+            if key.unit_type == "A" and target not in self.map.provinces:
                 return "ejército no puede avanzar al mar"
         elif order.order_type == "B":
             siege_location = target or province
@@ -382,7 +403,7 @@ class MilitaryResolver:
                 and support_location != key.origin
             ):
                 return "guarnición asediada solo puede apoyar su provincia"
-            player_power = self.units_by_key[key].player.power
+            player_power = self._player_power(key)
             supported_power = player_power if faction is None else faction
             if supported_power not in {player.power for player in self.game.players}:
                 return "facción apoyada inválida"
@@ -393,7 +414,7 @@ class MilitaryResolver:
                 key.unit_type == "G" and support_location == key.origin
             )
             if not own_garrison_province and support_location not in (
-                self.game.map.adjacent_locations(key.origin, mode)
+                self.map.adjacent_locations(key.origin, mode)
             ):
                 return "apoyo no adyacente"
             self.orders_by_unit[key] = MilitaryOrder(
@@ -410,7 +431,7 @@ class MilitaryResolver:
                 key, "T", target, transported_army=army
             )
         elif order.order_type == "C":
-            location = self.game.map.provinces.get(province)
+            location = self.map.provinces.get(province)
             if location is None:
                 return "conversión fuera de provincia"
             rebellion = self.rebellions_by_location.get(province)
@@ -449,7 +470,7 @@ class MilitaryResolver:
     def _besiege_invalid_reason(self, key: UnitKey, target: str) -> str | None:
         """Valida el asediador, la ciudad y el objetivo que se pretende someter."""
         province = key.origin.split()[0]
-        location = self.game.map.provinces.get(province)
+        location = self.map.provinces.get(province)
         if (
             key.unit_type not in {"A", "F"}
             or target != province
@@ -468,7 +489,12 @@ class MilitaryResolver:
         city_rebellion = rebellion is not None and rebellion[1] == "city"
         if not garrison_present and not city_rebellion:
             return "asedio sin objetivo"
-        if city_rebellion and not garrison_present and rebellion[0] != key.player_id:
+        if (
+            rebellion is not None
+            and rebellion[1] == "city"
+            and not garrison_present
+            and rebellion[0] != key.player_id
+        ):
             return "solo el controlador puede someter la rebelión urbana"
         return None
 
@@ -479,20 +505,20 @@ class MilitaryResolver:
 
     def _location_exists(self, location: str) -> bool:
         """Acepta únicamente identificadores presentes en el mapa cargado."""
-        return location in self.game.map.provinces or location in self.game.map.seas
+        return location in self.map.provinces or location in self.map.seas
 
     def _valid_fleet_location(self, location: str) -> bool:
         """Valida mares y costas exactas sin aceptar provincias interiores."""
-        if location in self.game.map.seas:
+        if location in self.map.seas:
             return True
-        province = self.game.map.provinces.get(location)
+        province = self.map.provinces.get(location)
         if province is None or not (province.has_port or province.sea_routes):
             return False
         base_location = location.split()[0]
         if location == base_location:
             coast_variants = {
                 candidate
-                for candidate, candidate_province in self.game.map.provinces.items()
+                for candidate, candidate_province in self.map.provinces.items()
                 if candidate.startswith(f"{base_location} ")
                 and candidate_province is province
             }
@@ -504,7 +530,7 @@ class MilitaryResolver:
         """Valida el origen según las restricciones del tipo de unidad."""
         if key.unit_type == "F":
             return self._location_exists(key.origin)
-        return key.origin in self.game.map.provinces
+        return key.origin in self.map.provinces
 
     def _conflicts(self) -> dict[str, list[UnitKey]]:
         """Proyecta cada orden sobre la plaza donde puede generar conflicto."""
@@ -748,9 +774,12 @@ class MilitaryResolver:
             )
             groups[group] = (endpoints, members)
             crossed.update(endpoints)
-        for location, members in locations.items():
-            if location not in crossed and set(members) & moving:
-                groups[location] = ((location,), tuple(sorted(members, key=_key_sort)))
+        for location, location_members in locations.items():
+            if location not in crossed and set(location_members) & moving:
+                groups[location] = (
+                    (location,),
+                    tuple(sorted(location_members, key=_key_sort)),
+                )
         return groups, moving
 
     def _dependencies(
@@ -778,8 +807,7 @@ class MilitaryResolver:
                 support = self.orders_by_unit[supporter]
                 if (
                     support.target_location in locations
-                    and support.supported_faction
-                    == self.units_by_key[unit].player.power
+                    and support.supported_faction == self._player_power(unit)
                     and supporter in group_by_unit
                 ):
                     dependencies.add(group_by_unit[supporter])
@@ -903,7 +931,7 @@ class MilitaryResolver:
             if order.order_type == "A"
             else conflict_location(unit.origin, unit.unit_type)
         )
-        faction = self.units_by_key[unit].player.power
+        faction = self._player_power(unit)
         return sum(
             1
             for supporter in active_supports
@@ -1121,7 +1149,7 @@ class MilitaryResolver:
         self, unit: UnitKey, location: str, active_supports: set[UnitKey]
     ) -> int:
         """Cuenta los apoyos válidos de la facción en una plaza concreta."""
-        faction = self.units_by_key[unit].player.power
+        faction = self._player_power(unit)
         return sum(
             1
             for key in active_supports
@@ -1246,7 +1274,7 @@ class MilitaryResolver:
             for order in self.orders_by_unit.values()
         ):
             raise MilitaryResolutionError("Convoy parcial")
-        players = {
+        players: dict[str, dict[str, list[str]]] = {
             player.player_id: {"A": [], "F": [], "G": []}
             for player in self.game.players
         }
@@ -1278,7 +1306,7 @@ class MilitaryResolver:
         for collections in players.values():
             for unit_type, locations in collections.items():
                 for location in locations:
-                    if unit_type == "A" and location not in self.game.map.provinces:
+                    if unit_type == "A" and location not in self.map.provinces:
                         raise MilitaryResolutionError("Ejército en el mar")
                     if unit_type == "F" and not self._valid_fleet_location(location):
                         raise MilitaryResolutionError("Costa de flota inválida")
@@ -1479,7 +1507,7 @@ class MilitaryResolver:
         for owner_id, collections in rebellions.items():
             for kind in ("province", "city"):
                 for location in collections[kind]:
-                    province = self.game.map.provinces.get(location)
+                    province = self.map.provinces.get(location)
                     if province is None or location in rebellion_locations:
                         raise MilitaryResolutionError(
                             "Estado final de rebelión inválido"
@@ -1504,7 +1532,7 @@ class MilitaryResolver:
         if len(set(besieges)) != len(besieges):
             raise MilitaryResolutionError("Estado final de asedios duplicado")
         for location in besieges:
-            province = self.game.map.provinces.get(location)
+            province = self.map.provinces.get(location)
             if province is None or province.city not in defensible_cities:
                 raise MilitaryResolutionError("Estado final de asedio inválido")
             besiegers = [
@@ -1603,11 +1631,11 @@ class MilitaryResolver:
                 continue
             outcome = outcomes[key]
             unit_type = outcome.final_unit_type
-            if unit_type == "A" and destination not in self.game.map.provinces:
+            if unit_type == "A" and destination not in self.map.provinces:
                 raise MilitaryResolutionError("Retirada de ejército fuera de provincia")
             if unit_type == "F" and not self._valid_fleet_location(destination):
                 raise MilitaryResolutionError("Retirada de flota a costa inválida")
-            if unit_type == "G" and destination not in self.game.map.provinces:
+            if unit_type == "G" and destination not in self.map.provinces:
                 raise MilitaryResolutionError(
                     "Retirada de guarnición fuera de provincia"
                 )
@@ -1801,7 +1829,7 @@ class MilitaryResolver:
         sieges: list[list[object]] | None = None,
     ) -> TurnEvent:
         """Construye el único evento canónico de la resolución militar."""
-        outcomes = [
+        outcomes: list[list[object]] = [
             [
                 [outcome.unit.player_id, outcome.unit.unit_type, outcome.unit.origin],
                 outcome.final_unit_type,
@@ -1811,7 +1839,7 @@ class MilitaryResolver:
             for outcome in resolution.outcomes
         ]
 
-        def primitive_keys(items: object) -> list[list[str | None]]:
+        def primitive_keys(items: Iterable[UnitKey]) -> list[list[object]]:
             """Ordena y serializa una colección de identidades militares."""
             return [
                 [key.player_id, key.unit_type, key.origin]

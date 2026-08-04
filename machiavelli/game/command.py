@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING
 
 from .tables import GameTables
 
@@ -45,7 +45,7 @@ class Command:
         conn: sqlite3.Connection,
         game: Game,
         player: Player,
-    ) -> list[Self]:
+    ) -> list[Command]:
         """Load commands through the repository compatibility facade."""
         from machiavelli.repositories.command_repository import CommandRepository
 
@@ -73,13 +73,14 @@ class Command:
 
     def __str__(self) -> str:
         """Return the historical human-readable representation of the command."""
-        provinces = self.game.map.provinces
-        seas = self.game.map.seas
+        game_map = self.game.require_map()
+        provinces = game_map.provinces
+        seas = game_map.seas
         locations = provinces | seas
 
         try:
             report: list[str] = []
-            target_type = None
+            target_type: str | None = None
             actor_type, actor_id = self.actor.split()
 
             if actor_type in ("A", "F", "G"):

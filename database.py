@@ -80,8 +80,7 @@ def get_users_with_messages():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT DISTINCT user_name, timestamp "
-        "FROM messages ORDER BY user_name ASC"
+        "SELECT DISTINCT user_name, timestamp FROM messages ORDER BY user_name ASC"
     )
     rows = cursor.fetchall()
     conn.close()
