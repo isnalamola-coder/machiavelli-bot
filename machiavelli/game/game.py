@@ -10,7 +10,9 @@ from typing import Self
 
 from machiavelli.events import TurnEvent
 
+from .command import Command
 from .map import Map, MovementMode, Province, Sea
+from .player import Player
 from .scenario import Power, Scenario
 from .tables import GameTables
 
@@ -44,7 +46,7 @@ class TooManyExpenses(Exception):
 
 
 @dataclass
-class Command:
+class _HistoricalCommand:
     """Representa un comando en la partida.
 
     En esta clase guardaremos los comandos de los jugadores. Además guardamos
@@ -250,7 +252,7 @@ class Command:
 
 
 @dataclass
-class Player:
+class _HistoricalPlayer:
     """Representa a un jugador de la partida.
 
     En esta clase guardaremos todo lo necesario para identificar al jugador y
@@ -2202,3 +2204,18 @@ class Game:
 
         # Si no pertenece a un jugador ni es independiente, la unidad no existe
         raise ValueError(f"No existe ninguna unidad '{unit_id}' en el juego.")
+
+
+__all__ = [
+    "Command",
+    "DuplicatedGameException",
+    "FailedToStartError",
+    "Game",
+    "GameNotFoundException",
+    "Player",
+    "TooManyExpenses",
+]
+
+# The historical in-file implementations are deliberately removed from the
+# runtime namespace after the canonical classes have been imported above.
+del _HistoricalCommand, _HistoricalPlayer
