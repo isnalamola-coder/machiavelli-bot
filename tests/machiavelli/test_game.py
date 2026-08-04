@@ -354,8 +354,10 @@ def test_load_game_success():
         '["turin"]',
     )
 
-    with patch.object(Player, "load_players") as mock_load_players:
-        mock_load_players.side_effect = lambda conn, game: [
+    with patch(
+        "machiavelli.repositories.player_repository.PlayerRepository.get_by_game"
+    ) as mock_get_players:
+        mock_get_players.side_effect = lambda game: [
             Player(game, player_id="fake_carlos", discord_id=111),
             Player(game, player_id="fake_sofia", discord_id=222),
         ]
@@ -388,7 +390,7 @@ def test_load_game_success():
             ]
         )
 
-        mock_load_players.assert_called_once_with(mock_conn, game)
+        mock_get_players.assert_called_once_with(game)
 
 
 def test_load_game_raises_not_found_and_never_loads_players():

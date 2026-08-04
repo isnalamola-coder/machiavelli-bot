@@ -9,12 +9,11 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-import database
 from machiavelli.database import upgrade
 from machiavelli.discord import init_game_commands
 
 
-def setup_service_logging():
+def setup_service_logging() -> None:
     # Nivel de log en la variable de entorno LOG_LEVEL
     log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
@@ -34,15 +33,8 @@ def setup_service_logging():
     logger.addHandler(stream_handler)
 
 
-# Cargar variables de entorno
-load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
-
-# La base de datos
+# La ruta se puede sobrescribir al arrancar, pero importarla no toca el sistema.
 DB_PATH = os.getenv("DATABASE_PATH", "machiavelli.db")
-
-# Ejecutamos las migraciones
-upgrade(DB_PATH)
 
 # Configurar intents
 intents = discord.Intents.default()
@@ -90,11 +82,8 @@ async def sync_commands(ctx, modo: str | None = None):
 async def on_ready():
     print(f"Bot conectado como {bot.user}")
 
-    # La base de datos antigua, por si todavía me hace falta
-    database.init_db()
-
-    # Los nuevos comandos
-    mach_group, shar_group = init_game_commands(DB_PATH)
+    # Los comandos usan la ruta preparada por main() o el valor seguro por defecto.
+    mach_group, shar_group = init_game_commands(bot.machiavelli_db_path)
     if not bot.tree.get_command("mach"):
         bot.tree.add_command(mach_group)
         print("Grupo 'mach' registrado en memoria local.")
@@ -117,11 +106,26 @@ async def on_app_command_error(
         await interaction.response.send_message("❌ Error interno.", ephemeral=True)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Prepare local configuration and start the Discord client explicitly."""
+    load_dotenv()
+    token = os.getenv("DISCORD_TOKEN")
+    db_path = os.getenv("DATABASE_PATH", "machiavelli.db")
+
     setup_service_logging()
-    if not TOKEN or TOKEN == "tu_token_aqui":
+    if not token or token == "tu_token_aqui":
         print(
             "⚠️ ADVERTENCIA: Por favor, configura tu DISCORD_TOKEN en el archivo .env."
         )
-    else:
-        bot.run(TOKEN)
+        return
+
+    upgrade(db_path)
+    bot.machiavelli_db_path = db_path
+    bot.run(token)
+
+
+bot.machiavelli_db_path = DB_PATH
+
+
+if __name__ == "__main__":
+    main()

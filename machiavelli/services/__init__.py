@@ -1,2 +1,5 @@
-# machiavelli/services/__init__.py
+"""Application service API."""
 
+from .game_service import GameService
+
+__all__ = ["GameService"]
