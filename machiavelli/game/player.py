@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING
 
 from .command import Command
 from .scenario import Power, Scenario
@@ -142,7 +142,7 @@ class Player:
         PlayerRepository(conn).save_commands(self)
 
     @classmethod
-    def load_players(cls, conn: sqlite3.Connection, game: Game) -> list[Self]:
+    def load_players(cls, conn: sqlite3.Connection, game: Game) -> list[Player]:
         """Load players through the repository compatibility facade."""
         from machiavelli.repositories.player_repository import PlayerRepository
 

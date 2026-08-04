@@ -277,6 +277,7 @@ class TestGameEngineRun(unittest.TestCase):
 
 class TestGameEngineDislodgementBarrier(unittest.TestCase):
     """Verifica la inyección de retiradas y la parada tras un fallo militar."""
+
     @patch("machiavelli.engine.core.ControlManager")
     @patch("machiavelli.engine.core.MilitaryResolver")
     @patch("machiavelli.engine.core.AssassinationResolver")

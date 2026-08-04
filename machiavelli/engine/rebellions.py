@@ -3,6 +3,8 @@
 
 from ..events import EventType, TurnEvent
 from ..game.game import Command, Game, Player
+from ..game.map import Map
+from ..game.scenario import Scenario
 
 
 class RebellionManager:
@@ -11,9 +13,25 @@ class RebellionManager:
     def __init__(self, game: Game):
         self.game = game
 
+    def _map(self) -> Map:
+        """Devuelve el mapa activo conservando la interfaz histórica de Game."""
+        game_map = self.game.map
+        if game_map is None:
+            raise RuntimeError("La partida requiere un mapa cargado")
+        return game_map
+
+    def _scenario(self) -> Scenario:
+        """Devuelve el escenario activo conservando la interfaz histórica de Game."""
+        scenario = self.game.scenario
+        if scenario is None:
+            raise RuntimeError("La partida requiere un escenario cargado")
+        return scenario
+
     def expense_rebellion_pacify(self, command: Command) -> None:
         """Pacifica una rebelión activa en una provincia o ciudad."""
         target = command.target
+        if target is None:
+            return
 
         for p in self.game.players:
             for rebel_list in (p.rebelled_provinces, p.rebelled_cities):
@@ -39,14 +57,16 @@ class RebellionManager:
             return
 
         # Determinamos los tipos de ciudad válidos según la regla fortress_active
+        scenario = self._scenario()
+        game_map = self._map()
         valid_cities = (
             ("fortified", "fortress")
-            if self.game.scenario.rules.fortress_active
+            if scenario.rules.fortress_active
             else ("fortified",)
         )
 
         if (
-            self.game.map.provinces[target].city in valid_cities
+            game_map.provinces[target].city in valid_cities
             and target not in owner.garrisons
         ):
             # Si hay ciudad fortificada (o fuerte) sin guarnición, rebelión en la ciudad
@@ -66,6 +86,8 @@ class RebellionManager:
         # Primer comprobamos si la provincia la controla alguien
         # (si no hay control, no hay rebeliones)
         target = command.target
+        if target is None:
+            return
 
         player_owner = next(
             (p for p in self.game.players if target in p.controlled_locations),
@@ -77,7 +99,7 @@ class RebellionManager:
 
         # Comprobamos que no sea una provincia natal del jugador. Si es natal de otro
         # jugador no importa
-        hc = self.game.scenario.province_home_country(target)
+        hc = self._scenario().province_home_country(target)
         if hc in player_owner.home_countries:
             return
 
@@ -89,6 +111,8 @@ class RebellionManager:
         # Primer comprobamos si la provincia la controla alguien
         # (si no hay control, no hay rebeliones)
         target = command.target
+        if target is None:
+            return
 
         player_owner = next(
             (p for p in self.game.players if target in p.controlled_locations),
@@ -99,7 +123,7 @@ class RebellionManager:
             return
 
         # Comprobamos que sea una provincia natal del jugador
-        hc = self.game.scenario.province_home_country(target)
+        hc = self._scenario().province_home_country(target)
         if hc not in player_owner.home_countries:
             return
 
@@ -115,7 +139,7 @@ class RebellionManager:
         for player in self.game.players:
             for command in player.commands:
                 if command.is_valid_expense(self.REBELLION_EXPENSE_PACIFY):
-                    self.expense_pacify(command)
+                    self.expense_rebellion_pacify(command)
                 elif command.is_valid_expense(self.REBELLION_EXPENSE_NON_HOME_COUNTRY):
                     self.expense_rebellion_non_home_country(command)
                 elif command.is_valid_expense(self.REBELLION_EXPENSE_HOME_COUNTRY):

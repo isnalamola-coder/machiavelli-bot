@@ -1,0 +1,74 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Python 3.13 on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install package and development tools
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Verify dependencies
+        run: python -m pip check
+
+      - name: Check formatting
+        run: python -m ruff format --check .
+
+      - name: Lint
+        run: python -m ruff check .
+
+      - name: Type check
+        run: python -m mypy machiavelli
+
+      - name: Run tests with coverage
+        run: >-
+          python -m pytest
+          --cov=machiavelli
+          --cov-report=term-missing
+          --cov-report=xml
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Install built wheel
+        run: >-
+          python -c "from pathlib import Path;
+          import subprocess, sys;
+          wheel = next(Path('dist').glob('*.whl'));
+          subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', str(wheel)])"
+
+      - name: Smoke-test installed package
+        run: >-
+          python -c "import os, tempfile;
+          os.chdir(tempfile.gettempdir());
+          import machiavelli;
+          from machiavelli.engine import GameEngine;
+          from machiavelli.game import Command, Game, Player;
+          from machiavelli.game.map import Map;
+          from machiavelli.game.scenario import Scenario;
+          assert Map.load_map().provinces;
+          assert Scenario.load_scenarios();
+          print(machiavelli, GameEngine, Game, Player, Command)"

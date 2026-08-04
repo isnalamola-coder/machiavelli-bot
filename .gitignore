@@ -9,9 +9,17 @@ build/
 dist/
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
+
+# Herramientas y artefactos locales de agentes
+.Agents/
+.agents/
+.codegraph/
+NUL
 
 # Universal
 .env

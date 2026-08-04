@@ -44,6 +44,20 @@ class Game:
     besieges: list[str] = field(default_factory=list)
     turn_events: list[str] = field(default_factory=list)
 
+    def require_map(self) -> Map:
+        """Return the loaded map or fail fast for an invalid game state."""
+        game_map = self.map
+        if game_map is None:
+            raise RuntimeError("La partida requiere un mapa cargado")
+        return game_map
+
+    def require_scenario(self) -> Scenario:
+        """Return the loaded scenario or fail fast for an invalid game state."""
+        scenario = self.scenario
+        if scenario is None:
+            raise RuntimeError("La partida requiere un escenario cargado")
+        return scenario
+
     def add_player(self, player_id: str, discord_id: int | None = None) -> Player:
         """Create and register one canonical player in this game aggregate."""
         if any(player.player_id == player_id for player in self.players):
@@ -307,8 +321,7 @@ class Game:
             raise GameNotFoundException("No se encontró ninguna partida.")
 
         init_kwargs = {
-            columns[index]: game_row[index + 1]
-            for index in range(len(columns))
+            columns[index]: game_row[index + 1] for index in range(len(columns))
         }
         for column in ("famine", "independent_garrisons", "besieges"):
             init_kwargs[column] = (
@@ -396,13 +409,13 @@ class Game:
             if famine[0] in ["both", "row"]:
                 dice = random.randint(1, 6) + random.randint(1, 6)
                 row = GameTables.famine[dice - 2]
-                provinces = {
+                famine_provinces = {
                     key: province
                     for key, province in self.map.provinces.items()
                     if key in row
                 }
-                self.famine.extend(provinces)
-                names = [province.name for province in provinces.values()]
+                self.famine.extend(famine_provinces)
+                names = [province.name for province in famine_provinces.values()]
                 report.append(
                     f"  * **Fila**: 2d6 => {dice}, **Hambre** en {', '.join(names)}"
                 )
@@ -412,13 +425,13 @@ class Game:
             if famine[0] in ["both", "column"]:
                 dice = random.randint(1, 6) + random.randint(1, 6)
                 column = [row[dice - 2] for row in GameTables.famine]
-                provinces = {
+                famine_provinces = {
                     key: province
                     for key, province in self.map.provinces.items()
                     if key in column
                 }
-                self.famine.extend(provinces)
-                names = [province.name for province in provinces.values()]
+                self.famine.extend(famine_provinces)
+                names = [province.name for province in famine_provinces.values()]
                 report.append(
                     f"  * **Columna**: 2d6 => {dice}, **Hambre** en {', '.join(names)}"
                 )
@@ -464,7 +477,9 @@ class Game:
                 for city in maybe_cities
                 if self.map.provinces[city].city in ("city", "fortified")
             ]
-            city_income = sum(self.map.provinces[city].major_city for city in cities)
+            city_income = sum(
+                self.map.provinces[city].major_city or 0 for city in cities
+            )
             fixed_income = (
                 "  * **Ingresos fijos.** Por Provincias y Mares, "
                 f"{province_income} ducados. Por Ciudades, {city_income} ducados"
@@ -580,9 +595,7 @@ class Game:
                         f"- `{command}:` No existe {missing_label}."
                     )
                 elif player.ducats - expenses >= 3:
-                    self.turn_events.append(
-                        f"- `{command}:` {label} {maintained}."
-                    )
+                    self.turn_events.append(f"- `{command}:` {label} {maintained}.")
                     expenses += 3
                 else:
                     self.turn_events.append(

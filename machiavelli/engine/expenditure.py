@@ -30,7 +30,7 @@ class ExpenditureProcessor:
                     self.game.add_event(
                         TurnEvent.expense(
                             EventType.EXPENSE_SYNTAX_ERROR,
-                            actor=player,
+                            actor=player.player_id,
                             expense_type=cmd.actor.split()[1],
                             target=cmd.target,
                             amount=cmd.command,
@@ -42,7 +42,7 @@ class ExpenditureProcessor:
                 self.game.add_event(
                     TurnEvent.expense(
                         EventType.EXPENSE_SYNTAX_ERROR,
-                        actor=player,
+                        actor=player.player_id,
                         expense_type=cmd.actor.split()[1],
                         target=cmd.target,
                         amount=cmd.command,
@@ -59,7 +59,7 @@ class ExpenditureProcessor:
                 self.game.add_event(
                     TurnEvent.expense(
                         EventType.EXPENSE,
-                        actor=player,
+                        actor=player.player_id,
                         expense_type=cmd.actor.split()[1],
                         target=cmd.target,
                         amount=cmd.command,
@@ -71,7 +71,7 @@ class ExpenditureProcessor:
                 self.game.add_event(
                     TurnEvent.expense(
                         EventType.EXPENSE_NO_FUNDS,
-                        actor=player,
+                        actor=player.player_id,
                         expense_type=cmd.actor.split()[1],
                         target=cmd.target,
                         amount=cmd.command,

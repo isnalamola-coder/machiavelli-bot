@@ -75,8 +75,13 @@ class SetupManager:
 
         # Coloca guarniciones independientes en todas las ciudades del mapa
         # Más fácil y limpio que buscar luego las ciudades no controladas por nadie
+        game_map = self.game.map
+        if game_map is None:
+            raise RuntimeError("La partida requiere un mapa cargado")
         garrisons = [
-            k for k, p in self.game.map.provinces.items() if p.city == "fortified"
+            key
+            for key, province in game_map.provinces.items()
+            if province.city == "fortified"
         ]
 
         for player, power_id in zip(self.game.players, power_ids, strict=True):

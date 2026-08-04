@@ -60,7 +60,7 @@ class TurnEvent:
         event_type: EventType,
         actor: str,
         expense_type: str,
-        target: str,
+        target: str | None,
         amount: int | str,
     ) -> Self:
         """Factory method para construir eventos de gasto."""

@@ -148,7 +148,8 @@ class OrderProcessor:
         if actor_type != "A" or command.command != "A" or command.target is None:
             return False
 
-        locations = self.game.map.provinces | self.game.map.seas
+        game_map = self.game.require_map()
+        locations = game_map.provinces | game_map.seas
         fleets = [fleet for owner in self.game.players for fleet in owner.fleets]
         convoy = [
             current.target
@@ -169,6 +170,6 @@ class OrderProcessor:
         return (
             last_place in fleets
             and command.target
-            in self.game.map.adjacent_locations(last_place, MovementMode.BOTH)
+            in game_map.adjacent_locations(last_place, MovementMode.BOTH)
             and (command.target in fleets or isinstance(destination, Province))
         )

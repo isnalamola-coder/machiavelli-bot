@@ -4,6 +4,7 @@ import logging
 import os
 import sqlite3
 import traceback
+from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from datetime import datetime
 
@@ -60,13 +61,19 @@ def format_error_with_location(e: Exception) -> str:
     return f"`{type(e).__name__}: {e}`"
 
 
+class DatabaseGroup(app_commands.Group):
+    """Application command group carrying its configured SQLite path."""
+
+    db_path: str
+
+
 # Grupo de comandos
-game_group = app_commands.Group(
+game_group = DatabaseGroup(
     name="mach", description="Comandos de las partidas de Machiavelli"
 )
 
 # Grupo de administración
-admin_group = app_commands.Group(
+admin_group = DatabaseGroup(
     name="shar",
     description="Comandos de gestión interna para el Juez/Admin",
     default_permissions=discord.Permissions(administrator=True),
@@ -86,8 +93,16 @@ def init_game_commands(db_path: str) -> tuple[app_commands.Group, app_commands.G
     return game_group, admin_group
 
 
+def _require_channel_id(interaction: discord.Interaction) -> int:
+    """Return the guild channel identifier required by game commands."""
+    channel_id = interaction.channel_id
+    if channel_id is None:
+        raise RuntimeError("Este comando solo puede ejecutarse dentro de un canal")
+    return channel_id
+
+
 @contextmanager
-def _service_session(db_path: str):
+def _service_session(db_path: str) -> Iterator[GameService]:
     """Yield an application service whose SQLite connection is always closed."""
     with closing(sqlite3.connect(db_path)) as conn:
         yield GameService(GameRepository(conn))
@@ -368,7 +383,7 @@ async def create(interaction: discord.Interaction, name: str):
             _create_game_record,
             admin_group.db_path,
             name,
-            interaction.channel_id,
+            _require_channel_id(interaction),
         )
         await interaction.followup.send(
             f"**¡Partida Creada!**\nSe ha creado la partida *'{game_name}'* "
@@ -396,7 +411,7 @@ async def add_player(
         game_name, players = await asyncio.to_thread(
             _add_player_record,
             admin_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             discord_player.id,
             name,
         )
@@ -438,7 +453,7 @@ async def remove_player(interaction: discord.Interaction, discord_user: discord.
         game_name, player_id, players = await asyncio.to_thread(
             _remove_player_record,
             admin_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             discord_user.id,
         )
         if players:
@@ -482,7 +497,7 @@ async def set_scenario(interaction: discord.Interaction, scenario_id: str):
         game_name, scenario_name = await asyncio.to_thread(
             _set_scenario_record,
             admin_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             scenario_id,
         )
         await interaction.followup.send(
@@ -555,9 +570,9 @@ async def set_scenario_autocomplete(
 )
 async def set_deadlines(
     interaction: discord.Interaction,
-    dia_semanal: app_commands.Choice[str] = None,
-    hora_semanal: str = None,
-    proximo_deadline: str = None,
+    dia_semanal: app_commands.Choice[str] | None = None,
+    hora_semanal: str | None = None,
+    proximo_deadline: str | None = None,
 ):
     await interaction.response.defer(ephemeral=False)
 
@@ -610,7 +625,7 @@ async def set_deadlines(
         game_name = await asyncio.to_thread(
             _update_deadlines_record,
             admin_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             weekly_deadline,
             next_deadline,
         )
@@ -677,7 +692,7 @@ async def run_game(interaction: discord.Interaction):
         report = await asyncio.to_thread(
             _execute_game_turn,
             admin_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
         )
     except GameNotFoundException:
         await interaction.edit_original_response(
@@ -731,7 +746,7 @@ async def game_status(interaction: discord.Interaction):
         report = await asyncio.to_thread(
             _get_status_report,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
         )
         messages = _chunk_lines(report) or ["No hay datos de estado disponibles."]
         for message in messages:
@@ -758,7 +773,7 @@ async def game_report(interaction: discord.Interaction):
         report = await asyncio.to_thread(
             _get_turn_report,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
         )
         messages = _chunk_lines(report) or ["No hay datos del último turno."]
         for message in messages:
@@ -786,7 +801,7 @@ async def cmdlist(interaction: discord.Interaction):
         player_id, commands = await asyncio.to_thread(
             _get_player_commands,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
         )
         if not commands:
@@ -842,7 +857,7 @@ async def cmd_actor_autocomplete(
         actors = await asyncio.to_thread(
             _get_available_actors,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             _selected_power(interaction),
         )
@@ -871,7 +886,7 @@ async def cmd_command_autocomplete(
         commands = await asyncio.to_thread(
             _get_available_commands,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             actor,
             _selected_power(interaction),
@@ -903,7 +918,7 @@ async def cmd_target_autocomplete(
         targets = await asyncio.to_thread(
             _get_available_targets,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             actor,
             command,
@@ -928,7 +943,7 @@ async def exp_expense_autocomplete(
         expenses = await asyncio.to_thread(
             _get_available_expenses,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             _selected_power(interaction),
         )
@@ -957,7 +972,7 @@ async def exp_target_autocomplete(
         targets = await asyncio.to_thread(
             _get_expense_targets,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             expense,
             _selected_power(interaction),
@@ -990,7 +1005,7 @@ async def exp_amount_autocomplete(
         amounts = await asyncio.to_thread(
             _get_expense_amounts,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             expense,
             target,
@@ -1026,7 +1041,10 @@ async def exp_amount_autocomplete(
     target=cmd_target_autocomplete,
 )
 async def cmd(
-    interaction: discord.Interaction, actor: str, command: str, target: str = None
+    interaction: discord.Interaction,
+    actor: str,
+    command: str,
+    target: str | None = None,
 ):
     await interaction.response.defer(ephemeral=True)
 
@@ -1034,7 +1052,7 @@ async def cmd(
         lines = await asyncio.to_thread(
             _submit_command_record,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             actor,
             command,
@@ -1070,7 +1088,7 @@ async def cmd_power_autocomplete(
             await asyncio.to_thread(
                 _get_active_powers,
                 admin_group.db_path,
-                interaction.channel_id,
+                _require_channel_id(interaction),
             )
         )
         choices = [
@@ -1107,7 +1125,7 @@ async def cmd_user(
     power: str,
     actor: str,
     command: str,
-    target: str = None,
+    target: str | None = None,
 ):
     await interaction.response.defer(ephemeral=True)
 
@@ -1115,7 +1133,7 @@ async def cmd_user(
         lines = await asyncio.to_thread(
             _submit_command_record,
             admin_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             actor,
             command,
@@ -1166,7 +1184,7 @@ async def expense(
         lines = await asyncio.to_thread(
             _submit_expense_record,
             game_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             expense,
             target,
@@ -1219,7 +1237,7 @@ async def expense_user(
         lines = await asyncio.to_thread(
             _submit_expense_record,
             admin_group.db_path,
-            interaction.channel_id,
+            _require_channel_id(interaction),
             interaction.user.id,
             expense,
             target,
