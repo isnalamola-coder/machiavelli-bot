@@ -5,6 +5,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from machiavelli.game.command import Command
+from machiavelli.game.game import Game
+from machiavelli.game.player import Player
 from machiavelli.game.tables import GameTables
 from machiavelli.services.command_reporter import CommandReporter
 
@@ -14,6 +16,18 @@ class FakeLocation:
 
     def __init__(self, name: str):
         self.name = name
+
+
+@pytest.fixture
+def command_factory():
+    """Construye órdenes con las relaciones canónicas de dominio."""
+    game = Game("Informes", database_id=1)
+    player = Player(game, "P1")
+
+    def create(actor: str, command: str, target: str | None = None) -> Command:
+        return Command(game, player, actor, command, target)
+
+    return create
 
 
 @pytest.fixture
@@ -33,7 +47,7 @@ def mock_game_map():
 
 
 class TestCommandReporter:
-    def test_unit_maintenance_turn(self, mock_game_map, monkeypatch):
+    def test_unit_maintenance_turn(self, mock_game_map, monkeypatch, command_factory):
         """Mantenimiento de Primavera (turn_number % 4 == 1)."""
         monkeypatch.setattr(GameTables, "actors", {"A": "Ejército"})
         monkeypatch.setattr(
@@ -42,12 +56,12 @@ class TestCommandReporter:
             {"M": {"text": "Mantener", "target_type": None}},
         )
 
-        cmd = Command(game_id=1, player_id=1, actor="A milan", command="M")
+        cmd = command_factory("A milan", "M")
         report = CommandReporter.format_report(cmd, mock_game_map, turn_number=1)
 
         assert report == "Ejército de Milan|Mantener"
 
-    def test_unit_campaign_turn(self, mock_game_map, monkeypatch):
+    def test_unit_campaign_turn(self, mock_game_map, monkeypatch, command_factory):
         """Campaña Militar (turn_number % 4 != 1)."""
         monkeypatch.setattr(GameTables, "actors", {"A": "Ejército"})
         monkeypatch.setattr(
@@ -56,14 +70,12 @@ class TestCommandReporter:
             {"A": {"text": "Avanzar a Provincia o Mar", "target_type": "location"}},
         )
 
-        cmd = Command(
-            game_id=1, player_id=1, actor="A milan", command="A", target="venic"
-        )
+        cmd = command_factory("A milan", "A", "venic")
         report = CommandReporter.format_report(cmd, mock_game_map, turn_number=2)
 
         assert report == "Ejército de Milan|Avanzar a Provincia o Mar|Venice"
 
-    def test_expense_report(self, mock_game_map, monkeypatch):
+    def test_expense_report(self, mock_game_map, monkeypatch, command_factory):
         """Comando de Gasto/Soborno."""
         monkeypatch.setattr(
             GameTables,
@@ -71,7 +83,7 @@ class TestCommandReporter:
             {"B": {"text": "Pacificar rebelión", "target_type": "province"}},
         )
 
-        cmd = Command(game_id=1, player_id=1, actor="E B", command="12", target="flore")
+        cmd = command_factory("E B", "12", "flore")
         report = CommandReporter.format_report(cmd, mock_game_map, turn_number=2)
 
         assert report == "Pacificar rebelión|Florence|12 ducados"
@@ -98,6 +110,7 @@ class TestCommandReporter:
         target_type,
         target_str,
         expected_target_report,
+        command_factory,
     ):
         """Verifica que todos los tipos de target_type se parsean correctamente."""
         monkeypatch.setattr(GameTables, "actors", {"A": "Ejército"})
@@ -108,16 +121,14 @@ class TestCommandReporter:
             {"X": {"text": "Acción Especial", "target_type": target_type}},
         )
 
-        cmd = Command(
-            game_id=1, player_id=1, actor="A milan", command="X", target=target_str
-        )
+        cmd = command_factory("A milan", "X", target_str)
         report = CommandReporter.format_report(cmd, mock_game_map, turn_number=2)
 
         assert expected_target_report in report.split("|")
 
-    def test_malformed_command_graceful_handling(self, mock_game_map):
+    def test_malformed_command_graceful_handling(self, mock_game_map, command_factory):
         """Comando mal formado devuelve 'Orden inválida (...)' sin romper ejecución."""
-        cmd = Command(game_id=1, player_id=1, actor="SIN_ESPACIOS", command="M")
+        cmd = command_factory("SIN_ESPACIOS", "M")
         report = CommandReporter.format_report(cmd, mock_game_map, turn_number=1)
 
         assert report.startswith("Orden inválida")

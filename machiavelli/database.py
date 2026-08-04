@@ -69,55 +69,39 @@ _UPGRADES = (
 logger = logging.getLogger(__name__)
 
 
-def upgrade(db_path: str):
-    """Comprueba el schema de la base de datos y la actualiza, si es necesario.
-
-    Lee el pragma 'user_version' actual de la base de datos y lo compara con
-    la versión del código objetivo (`_SCHEMA_VERSION`). Si la base de datos no
-    está actualizada, ejecuta de forma secuencial y ordenada los scripts de
-    `_UPGRADES`.
-
-    Si un script falla en un paso intermedio, los cambios de ese paso concreto
-    se revierten por completo (rollback), asegurando que la base de datos quede
-    en un estado consistente y se marca con la versión del último schema
-    actualizado con éxito.
-
-    Args:
-        db_path (str): Ruta al archivo de la base de datos SQLite.
-
-    Raises:
-        Exception: Si ocurre un error al ejecutar un script de SQL, deshace el
-            paso actual y eleva la excepción.
-    """
-    conn = sqlite3.connect(db_path)
+def upgrade_connection(conn: sqlite3.Connection) -> None:
+    """Upgrade an existing connection without taking ownership of its lifetime."""
     cursor = conn.cursor()
+    cursor.execute("PRAGMA user_version;")
+    current = cursor.fetchone()[0]
 
+    if current >= _SCHEMA_VERSION:
+        logger.info("No existen actualizaciones de base de datos")
+        return
+
+    logger.warning(
+        "Actualiza el schema de la BBDD de %s a %s",
+        current,
+        _SCHEMA_VERSION,
+    )
     try:
-        # lee la versión actual (0 por defecto)
-        cursor.execute("PRAGMA user_version;")
-        current = cursor.fetchone()[0]
+        for version in range(current, _SCHEMA_VERSION):
+            target_version = version + 1
+            logger.info("Actualizando a la versión %s", target_version)
+            cursor.executescript(_UPGRADES[version])
+            cursor.execute(f"PRAGMA user_version = {target_version};")
+        conn.commit()
+        logger.info("Esquema de la BBDD actualizado con éxito")
+    except Exception:
+        conn.rollback()
+        logger.exception("Falló la actualización al schema %s", target_version)
+        raise
 
-        if current < _SCHEMA_VERSION:
-            logger.warning(
-                "Actualiza el schema de la BBDD de %s a %s",
-                current,
-                _SCHEMA_VERSION,
-            )
 
-            try:
-                for v in range(current, _SCHEMA_VERSION):
-                    logger.info(f"Actualizando a la versión  {v + 1}")
-                    cursor.executescript(_UPGRADES[v])
-                    cursor.execute(f"PRAGMA user_version = {v + 1};")
-                else:
-                    conn.commit()
-                    logger.info("Esquema de la BBDD actualizado con éxito")
-            except Exception:
-                conn.rollback()
-                logger.exception(f"Falló la actualización al schema {v + 1}")
-                raise
-        else:
-            logger.info("No existen actualizaciones de base de datos")
-
+def upgrade(db_path: str) -> None:
+    """Open a SQLite database, apply all pending migrations, and close it."""
+    conn = sqlite3.connect(db_path)
+    try:
+        upgrade_connection(conn)
     finally:
         conn.close()

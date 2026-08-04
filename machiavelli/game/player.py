@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -100,9 +99,7 @@ class Player:
             raise ValueError("El jugador no tiene un escenario activo")
         provinces = active_scenario.home_countries_provinces(self.home_countries) or []
         return [
-            province
-            for province in self.controlled_locations
-            if province in provinces
+            province for province in self.controlled_locations if province in provinces
         ]
 
     def nonhc_provinces(self, scenario: Scenario | None = None) -> list[str]:
@@ -133,90 +130,23 @@ class Player:
                     )
 
     def save(self, conn: sqlite3.Connection) -> None:
-        """Persist the player through the historical compatibility facade."""
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO players (
-                game_id, player_id, discord_id, controlled_locations,
-                armies, fleets, garrisons, ass_counters, ducats,
-                rebelled_provinces, rebelled_cities, home_countries, power
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(game_id, player_id) DO UPDATE SET
-                discord_id = excluded.discord_id,
-                controlled_locations = excluded.controlled_locations,
-                armies = excluded.armies,
-                fleets = excluded.fleets,
-                garrisons = excluded.garrisons,
-                ass_counters = excluded.ass_counters,
-                ducats = excluded.ducats,
-                rebelled_provinces = excluded.rebelled_provinces,
-                rebelled_cities = excluded.rebelled_cities,
-                home_countries = excluded.home_countries,
-                power = excluded.power
-            """,
-            (
-                self.game_id,
-                self.player_id,
-                self.discord_id,
-                json.dumps(self.controlled_locations),
-                json.dumps(self.armies),
-                json.dumps(self.fleets),
-                json.dumps(self.garrisons),
-                json.dumps(self.ass_counters),
-                self.ducats,
-                json.dumps(self.rebelled_provinces),
-                json.dumps(self.rebelled_cities),
-                json.dumps(self.home_countries),
-                self.power,
-            ),
-        )
-        self.save_commands(conn)
+        """Persist the player through the repository compatibility facade."""
+        from machiavelli.repositories.player_repository import PlayerRepository
+
+        PlayerRepository(conn).save(self)
 
     def save_commands(self, conn: sqlite3.Connection) -> None:
-        """Replace the persisted commands while preserving their list order."""
-        conn.execute(
-            "DELETE FROM commands WHERE game_id = ? AND player_id = ?",
-            (self.game_id, self.player_id),
-        )
-        for command in self.commands:
-            command.save(conn)
+        """Replace commands through the repository compatibility facade."""
+        from machiavelli.repositories.player_repository import PlayerRepository
+
+        PlayerRepository(conn).save_commands(self)
 
     @classmethod
     def load_players(cls, conn: sqlite3.Connection, game: Game) -> list[Self]:
-        """Load all players associated with a game."""
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT player_id, discord_id, controlled_locations, armies, fleets,
-                garrisons, ass_counters, ducats, rebelled_provinces,
-                rebelled_cities, home_countries, power
-            FROM players WHERE game_id = ?
-            """,
-            (game.database_id,),
-        )
+        """Load players through the repository compatibility facade."""
+        from machiavelli.repositories.player_repository import PlayerRepository
 
-        players: list[Self] = []
-        for row in cursor.fetchall():
-            player = cls(
-                game=game,
-                player_id=row[0],
-                discord_id=row[1],
-                controlled_locations=json.loads(row[2]) if row[2] else [],
-                armies=json.loads(row[3]) if row[3] else [],
-                fleets=json.loads(row[4]) if row[4] else [],
-                garrisons=json.loads(row[5]) if row[5] else [],
-                ass_counters=json.loads(row[6]) if row[6] else [],
-                ducats=row[7],
-                rebelled_provinces=json.loads(row[8]) if row[8] else [],
-                rebelled_cities=json.loads(row[9]) if row[9] else [],
-                home_countries=json.loads(row[10]) if row[10] else [],
-                power=row[11],
-            )
-            player.commands = Command.load_commands(conn, game, player)
-            players.append(player)
-        return players
+        return PlayerRepository(conn).get_by_game(game)
 
     def player_report(self) -> list[str]:
         """Generate the player's current public report."""
