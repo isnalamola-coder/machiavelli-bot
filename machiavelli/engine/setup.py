@@ -93,7 +93,7 @@ class SetupManager:
 
             # Asigna la potencia al jugador, junto con sus provincias y unidades.
             power = self.game.scenario.powers[power_id]
-            player.assign_power(power_id, power, power_ids)
+            player.assign_power_from_scenario(power_id, power, power_ids)
 
             # Elimina las guarniciones independientes de sus provincias
             garrisons = [p for p in garrisons if p not in power.controlled_provinces]

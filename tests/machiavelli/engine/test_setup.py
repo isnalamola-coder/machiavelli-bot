@@ -108,5 +108,5 @@ def test_setup_successful_run():
 
     assert game.add_event.call_count == 3
     assert game.independent_garrisons == ["flore"]
-    p1.assign_power.assert_called_once()
-    p2.assign_power.assert_called_once()
+    p1.assign_power_from_scenario.assert_called_once()
+    p2.assign_power_from_scenario.assert_called_once()
