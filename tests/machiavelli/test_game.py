@@ -65,7 +65,7 @@ def test_military_event_round_trip_preserves_six_lists(tmp_path):
         [["P1", "province", "rome", "subdued"]],
         [],
     )
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         game = Game("Evento militar")
         game.add_event(event)
         game.save(conn)
