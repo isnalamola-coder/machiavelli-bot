@@ -5,6 +5,7 @@ from collections import defaultdict
 from unittest.mock import Mock, patch
 
 from machiavelli.engine.bribes import Bribe, BribeResolver
+from machiavelli.events import EventType, TurnEvent
 from machiavelli.game.map import MovementMode
 from tests.machiavelli.engine.helpers import create_mock_game, create_mock_player
 
@@ -240,9 +241,30 @@ class TestExecuteBribe(unittest.TestCase):
         self.mock_game.add_event.assert_called_once()
 
         event_call = self.mock_game.add_event.call_args[0][0]
-        self.assertEqual(event_call.data["expense"], "G")
-        self.assertEqual(event_call.data["target"], "G pisa")
-        self.assertEqual(event_call.data["amount"], 9)
+        self.assertIsInstance(event_call, TurnEvent)
+        self.assertEqual(event_call.type, EventType.BRIBE_EXECUTED)
+        self.assertEqual(
+            event_call.data,
+            {
+                "player": "Actor",
+                "expense": "G",
+                "target": "G pisa",
+                "amount": 9,
+            },
+        )
+        self.assertFalse(hasattr(EventType, "BRIBE_SET"))
+
+    def test_execute_bribe_application_failure_does_not_emit_partial_event(self):
+        self.mock_game.independent_garrisons = []
+        bribe = Bribe(
+            target="G pisa", owner=None, actor=self.actor, amount=9, command="G"
+        )
+
+        with self.assertRaises(ValueError):
+            self.resolver.execute_bribe(bribe)
+
+        self.mock_game.add_event.assert_not_called()
+        self.assertEqual(self.mock_game.independent_garrisons, [])
 
     def test_execute_bribe_remove_independent_garrison(self):
         """Elimina una guarnición autónoma de la lista del juego."""

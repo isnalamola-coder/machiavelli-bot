@@ -33,14 +33,21 @@ class RebellionManager:
         if target is None:
             return
 
-        for p in self.game.players:
-            for rebel_list in (p.rebelled_provinces, p.rebelled_cities):
+        for player in self.game.players:
+            for kind, rebel_list in (
+                ("province", player.rebelled_provinces),
+                ("city", player.rebelled_cities),
+            ):
                 if target in rebel_list:
                     rebel_list.remove(target)
                     self.game.add_event(
                         TurnEvent(
                             type=EventType.REBELLION_PACIFY,
-                            data={"province": target},
+                            data={
+                                "player": player.player_id,
+                                "province": target,
+                                "kind": kind,
+                            },
                         )
                     )
                     return  # Solo hay una rebelión por provincia
@@ -72,13 +79,19 @@ class RebellionManager:
             # Si hay ciudad fortificada (o fuerte) sin guarnición, rebelión en la ciudad
             owner.rebelled_cities.append(target)
             self.game.add_event(
-                TurnEvent(type=EventType.REBELLION_CITY, data={"province": target})
+                TurnEvent(
+                    type=EventType.REBELLION_CITY,
+                    data={"player": owner.player_id, "province": target},
+                )
             )
         else:
             # Si no, la rebelión se sitúa en la provincia
             owner.rebelled_provinces.append(target)
             self.game.add_event(
-                TurnEvent(type=EventType.REBELLION_PROVINCE, data={"province": target})
+                TurnEvent(
+                    type=EventType.REBELLION_PROVINCE,
+                    data={"player": owner.player_id, "province": target},
+                )
             )
 
     def expense_rebellion_non_home_country(self, command: Command) -> None:

@@ -1,5 +1,6 @@
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -127,23 +128,9 @@ def test_init_db_is_idempotent(repo: DatabaseManager) -> None:
 
 def test_init_db_incremental_migration(db_path: Path) -> None:
     """Prueba que una BBDD en versión 1 se actualice correctamente."""
-    # Crear manualmente una BBDD antigua (versión 1)
+    # Crear manualmente una BBDD antigua completa (versión 1)
     conn = sqlite3.connect(db_path)
-    conn.execute(
-        """
-        CREATE TABLE games (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            channel_id INTEGER UNIQUE,
-            scenario_id TEXT,
-            turn_number INTEGER DEFAULT 0,
-            weekly_deadline TEXT,
-            next_deadline TEXT,
-            famine TEXT,
-            independent_garrisons TEXT
-        );
-        """
-    )
+    conn.executescript(_UPGRADES[0])
     conn.execute("PRAGMA user_version = 1;")
     conn.commit()
     conn.close()
@@ -221,8 +208,10 @@ def test_upgrade_connection_does_not_close_caller_connection(db_path: Path) -> N
 
 
 @pytest.mark.parametrize("source_version", [1, 2, 3])
-def test_upgrade_preserves_historical_rows(db_path: Path, source_version: int) -> None:
-    """Las migraciones conservan partidas, jugadores, eventos y órdenes existentes."""
+def test_upgrade_preserves_domain_rows_and_restarts_events(
+    db_path: Path, source_version: int
+) -> None:
+    """v4 conserva el agregado persistente y reinicia solo los eventos efímeros."""
     conn = sqlite3.connect(db_path)
     try:
         for script in _UPGRADES[:source_version]:
@@ -283,9 +272,15 @@ def test_upgrade_preserves_historical_rows(db_path: Path, source_version: int) -
             "SELECT player_id, discord_id, ducats FROM players WHERE game_id = ?",
             (game_id,),
         ).fetchone() == ("Florencia", 456, 12)
+        assert [row[1] for row in conn.execute("PRAGMA table_info(game_events)")] == [
+            "id",
+            "game_id",
+            "event_type",
+            "data_json",
+        ]
         assert conn.execute(
-            "SELECT message FROM game_events WHERE game_id = ?", (game_id,)
-        ).fetchone() == ("Evento histórico",)
+            "SELECT COUNT(*) FROM game_events WHERE game_id = ?", (game_id,)
+        ).fetchone() == (0,)
         if source_version == 3:
             assert conn.execute(
                 "SELECT actor, command, target FROM commands WHERE game_id = ?",
@@ -346,3 +341,163 @@ def test_database_manager_delegates_to_upgrade_connection(
 
     assert calls == [connection]
     assert connection.closed
+
+
+def _create_v3_database(path: Path) -> tuple[int, tuple[object, ...]]:
+    """Create a representative v3 database and return its stable row snapshot."""
+    conn = sqlite3.connect(path)
+    try:
+        for script in _UPGRADES[:3]:
+            conn.executescript(script)
+        conn.execute("PRAGMA user_version = 3;")
+        conn.execute(
+            "INSERT INTO games (name, channel_id, famine, independent_garrisons, "
+            "besieges) VALUES (?, ?, ?, ?, ?)",
+            ("v3", 777, "[]", "[]", "[]"),
+        )
+        game_id = conn.execute(
+            "SELECT id FROM games WHERE name = ?", ("v3",)
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO players (game_id, player_id, controlled_locations, armies, "
+            "fleets, garrisons, ass_counters, ducats, rebelled_provinces, "
+            "rebelled_cities, home_countries) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (game_id, "P1", "[]", "[]", "[]", "[]", "[]", 5, "[]", "[]", "[]"),
+        )
+        conn.execute(
+            "INSERT INTO commands (game_id, player_id, actor, command, target) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (game_id, "P1", "A flore", "H", None),
+        )
+        conn.execute(
+            "INSERT INTO game_events (game_id, message) VALUES (?, ?)",
+            (game_id, "histórico"),
+        )
+        conn.commit()
+        snapshot = (
+            conn.execute("SELECT name, channel_id FROM games").fetchone(),
+            conn.execute("SELECT player_id, ducats FROM players").fetchone(),
+            conn.execute("SELECT actor, command, target FROM commands").fetchone(),
+            conn.execute("SELECT message FROM game_events").fetchone(),
+        )
+        return game_id, snapshot
+    finally:
+        conn.close()
+
+
+def test_schema_v4_creates_structured_event_columns(repo: DatabaseManager) -> None:
+    repo.init_db()
+    conn = repo.get_connection()
+    try:
+        columns = [
+            row["name"] for row in conn.execute("PRAGMA table_info(game_events)")
+        ]
+        assert _SCHEMA_VERSION == 4
+        assert columns == ["id", "game_id", "event_type", "data_json"]
+    finally:
+        conn.close()
+
+
+def test_upgrade_v3_to_v4_restarts_only_event_history(db_path: Path) -> None:
+    game_id, snapshot = _create_v3_database(db_path)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        upgrade_connection(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert [row[1] for row in conn.execute("PRAGMA table_info(game_events)")] == [
+            "id",
+            "game_id",
+            "event_type",
+            "data_json",
+        ]
+        assert conn.execute("SELECT COUNT(*) FROM game_events").fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT name, channel_id FROM games WHERE id = ?", (game_id,)
+            ).fetchone()
+            == snapshot[0]
+        )
+        assert (
+            conn.execute(
+                "SELECT player_id, ducats FROM players WHERE game_id = ?", (game_id,)
+            ).fetchone()
+            == snapshot[1]
+        )
+        assert (
+            conn.execute(
+                "SELECT actor, command, target FROM commands WHERE game_id = ?",
+                (game_id,),
+            ).fetchone()
+            == snapshot[2]
+        )
+    finally:
+        conn.close()
+
+
+class _FailingV4Cursor(sqlite3.Cursor):
+    """Raise after a selected v4 statement has executed."""
+
+    def execute(self, sql: str, parameters=()):  # type: ignore[no-untyped-def]
+        result = super().execute(sql, parameters)
+        marker = cast("_FailingV4Connection", self.connection).failure_marker
+        normalized = " ".join(sql.upper().split())
+        if marker in normalized:
+            raise sqlite3.OperationalError(f"fallo inyectado tras {marker}")
+        return result
+
+
+class _FailingV4Connection(sqlite3.Connection):
+    failure_marker: str
+
+    def cursor(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs["factory"] = _FailingV4Cursor
+        return super().cursor(*args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "failure_marker",
+    [
+        "DROP TABLE GAME_EVENTS",
+        "CREATE TABLE GAME_EVENTS",
+        "PRAGMA USER_VERSION = 4",
+    ],
+)
+def test_v4_migration_rolls_back_schema_rows_and_version(
+    db_path: Path, failure_marker: str
+) -> None:
+    _, snapshot = _create_v3_database(db_path)
+    conn = sqlite3.connect(db_path, factory=_FailingV4Connection)
+    conn.failure_marker = failure_marker
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="fallo inyectado"):
+            upgrade_connection(conn)
+    finally:
+        conn.close()
+
+    verification = sqlite3.connect(db_path)
+    try:
+        assert verification.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert [
+            row[1] for row in verification.execute("PRAGMA table_info(game_events)")
+        ] == ["id", "game_id", "message"]
+        assert (
+            verification.execute("SELECT message FROM game_events").fetchone()
+            == snapshot[3]
+        )
+        assert (
+            verification.execute("SELECT name, channel_id FROM games").fetchone()
+            == snapshot[0]
+        )
+        assert (
+            verification.execute("SELECT player_id, ducats FROM players").fetchone()
+            == snapshot[1]
+        )
+        assert (
+            verification.execute(
+                "SELECT actor, command, target FROM commands"
+            ).fetchone()
+            == snapshot[2]
+        )
+    finally:
+        verification.close()

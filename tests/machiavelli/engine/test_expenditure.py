@@ -2,8 +2,73 @@
 import unittest
 from unittest.mock import Mock
 
+import pytest
+
 from machiavelli.engine.expenditure import ExpenditureProcessor
-from machiavelli.events import EventType
+from machiavelli.events import EventType, TurnEvent
+
+
+@pytest.mark.parametrize(
+    (
+        "event_type",
+        "command_value",
+        "ducats",
+        "target",
+        "expected_amount",
+        "expected_ducats",
+        "command_retained",
+    ),
+    [
+        (
+            EventType.EXPENSE_SYNTAX_ERROR,
+            "diez",
+            50,
+            None,
+            "diez",
+            50,
+            False,
+        ),
+        (EventType.EXPENSE, "20", 50, "pisa", 20, 30, True),
+        (EventType.EXPENSE_NO_FUNDS, "100", 50, None, 100, 50, False),
+    ],
+)
+def test_expense_results_emit_exact_typed_payloads(
+    event_type: EventType,
+    command_value: str,
+    ducats: int,
+    target: str | None,
+    expected_amount: int | str,
+    expected_ducats: int,
+    command_retained: bool,
+) -> None:
+    game = Mock()
+    game.add_event = Mock()
+    player = Mock(player_id="P1", ducats=ducats, commands=[])
+    command = Mock(
+        command=command_value,
+        actor="E G",
+        target=target,
+    )
+    command.is_valid_expense.return_value = True
+    player.commands = [command]
+    game.players = [player]
+
+    ExpenditureProcessor(game).run()
+
+    events = [call.args[0] for call in game.add_event.call_args_list]
+    assert len(events) == 1
+    assert all(isinstance(event, TurnEvent) for event in events)
+    assert not any(isinstance(event, str) for event in events)
+    event = events[0]
+    assert event.type is event_type
+    assert dict(event.data) == {
+        "player": "P1",
+        "expense": "G",
+        "target": target,
+        "amount": expected_amount,
+    }
+    assert player.ducats == expected_ducats
+    assert player.commands == ([command] if command_retained else [])
 
 
 class TestExpenditureProcessor(unittest.TestCase):
@@ -16,6 +81,7 @@ class TestExpenditureProcessor(unittest.TestCase):
 
         # Estado inicial del jugador de prueba
         self.player = Mock()
+        self.player.player_id = "P1"
         self.player.ducats = 50
         self.player.commands = []
         self.mock_game.players = [self.player]

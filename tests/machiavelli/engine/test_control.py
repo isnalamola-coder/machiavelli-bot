@@ -5,6 +5,7 @@ from unittest.mock import Mock, call, patch
 
 from machiavelli.engine.control import ControlManager
 from machiavelli.events import EventType, TurnEvent
+from machiavelli.game.game import Game
 
 
 class TestProvincesWithOwnUnits(unittest.TestCase):
@@ -146,7 +147,9 @@ class TestControlChanges(unittest.TestCase):
             event = self.mock_game.add_event.call_args[0][0]
             self.assertIsInstance(event, TurnEvent)
             self.assertEqual(event.type, EventType.GET_CONTROL)
-            self.assertEqual(event.data, {"player": "FLORENCE", "provinces": ["pisa"]})
+            self.assertEqual(
+                dict(event.data), {"player": "FLORENCE", "provinces": ("pisa",)}
+            )
 
     def test_control_changes_lose_control(self):
         """Pierde el control de una provincia si hay presencia de unidades ajenas."""
@@ -168,7 +171,35 @@ class TestControlChanges(unittest.TestCase):
             self.mock_game.add_event.assert_called_once()
             event = self.mock_game.add_event.call_args[0][0]
             self.assertEqual(event.type, EventType.LOSE_CONTROL)
-            self.assertEqual(event.data, {"player": "FLORENCE", "provinces": ["flore"]})
+            self.assertEqual(
+                dict(event.data), {"player": "FLORENCE", "provinces": ("flore",)}
+            )
+
+    def test_control_changes_emits_sorted_gain_before_sorted_loss(self):
+        self.player.controlled_locations = ["rome", "flore", "milan"]
+
+        with (
+            patch.object(
+                self.manager,
+                "_provinces_with_own_units",
+                return_value={"venic", "pisa"},
+            ),
+            patch.object(
+                self.manager,
+                "_provinces_with_others_units",
+                return_value={"rome", "milan"},
+            ),
+        ):
+            self.manager.control_changes(self.player)
+
+        events = [call.args[0] for call in self.mock_game.add_event.call_args_list]
+        self.assertEqual(
+            [event.type for event in events],
+            [EventType.GET_CONTROL, EventType.LOSE_CONTROL],
+        )
+        self.assertEqual(events[0].data["provinces"], ("pisa", "venic"))
+        self.assertEqual(events[1].data["provinces"], ("milan", "rome"))
+        self.assertEqual(self.player.controlled_locations, ["flore", "pisa", "venic"])
 
     def test_control_changes_retain_control(self):
         """Mantiene el control de una provincia vacía si no hay unidades ajenas."""
@@ -450,6 +481,64 @@ class TestControlManagerRun(unittest.TestCase):
             mock_loses.assert_has_calls([call(self.player_1), call(self.player_2)])
             mock_gains.assert_has_calls([call(self.player_1), call(self.player_2)])
             mock_status.assert_has_calls([call(self.player_1), call(self.player_2)])
+
+    def test_run_emits_complete_event_order_for_multiple_players(self):
+        scenario = Mock(year=1454)
+        game = Game("control order", scenario=scenario, turn_number=2)
+        first = Mock(
+            player_id="FLORENCE",
+            controlled_locations=["rome", "milan"],
+        )
+        second = Mock(
+            player_id="MILAN",
+            controlled_locations=["venic", "pisa"],
+        )
+        game.players = [first, second]
+        manager = ControlManager(game)
+
+        def own_provinces(player):
+            return {"venic", "pisa"} if player is first else {"rome", "flore"}
+
+        def other_provinces(player):
+            return {"rome", "milan"} if player is first else {"venic", "pisa"}
+
+        with (
+            patch.object(
+                manager,
+                "_provinces_with_own_units",
+                side_effect=own_provinces,
+            ),
+            patch.object(
+                manager,
+                "_provinces_with_others_units",
+                side_effect=other_provinces,
+            ),
+            patch.object(manager, "home_country_control_loses"),
+            patch.object(manager, "home_country_control_gains"),
+            patch.object(manager, "check_player_status"),
+        ):
+            manager.run()
+
+        self.assertEqual(
+            [event.type for event in game.turn_events],
+            [
+                EventType.GET_CONTROL,
+                EventType.LOSE_CONTROL,
+                EventType.GET_CONTROL,
+                EventType.LOSE_CONTROL,
+                EventType.START_SEASON,
+            ],
+        )
+        self.assertEqual(
+            [dict(event.data) for event in game.turn_events],
+            [
+                {"player": "FLORENCE", "provinces": ("pisa", "venic")},
+                {"player": "FLORENCE", "provinces": ("milan", "rome")},
+                {"player": "MILAN", "provinces": ("flore", "rome")},
+                {"player": "MILAN", "provinces": ("pisa", "venic")},
+                {"year": 1454, "season": 2},
+            ],
+        )
 
     def test_run_season_and_year(self):
         """Turno 0: Mantiene año base (1454) y estación 0."""

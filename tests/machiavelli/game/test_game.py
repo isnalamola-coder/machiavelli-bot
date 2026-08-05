@@ -2,11 +2,55 @@
 
 import unittest
 
+from machiavelli.events import EventType, TurnEvent
 from machiavelli.game.game import Game
 from tests.machiavelli.engine.helpers import (
     create_mock_game,
     create_mock_player,
 )
+
+
+class TestRetiredGameAlgorithms(unittest.TestCase):
+    """Verify duplicated historical algorithms are absent from the aggregate."""
+
+    def test_initial_setup_is_not_part_of_game_api(self):
+        self.assertFalse(hasattr(Game, "initial_setup"))
+
+    def test_spring_start_is_not_part_of_game_api(self):
+        self.assertFalse(hasattr(Game, "spring_start"))
+
+
+class TestAddEvent(unittest.TestCase):
+    def test_preserves_exact_turn_event_object(self):
+        game = Game("event identity")
+        event = TurnEvent(EventType.START_GAME, {"scenario": "Rinascimento"})
+
+        game.add_event(event)
+
+        self.assertIs(game.turn_events[0], event)
+
+    def test_preserves_insertion_order(self):
+        game = Game("event order")
+        first = TurnEvent(EventType.START_GAME, {"scenario": "Rinascimento"})
+        second = TurnEvent(EventType.START_SEASON, {"year": 1454, "season": 1})
+
+        game.add_event(first)
+        game.add_event(second)
+
+        self.assertEqual(game.turn_events, [first, second])
+        self.assertIs(game.turn_events[0], first)
+        self.assertIs(game.turn_events[1], second)
+
+    def test_rejects_string_immediately_without_modifying_history(self):
+        game = Game("event rejection")
+        existing = TurnEvent(EventType.START_GAME, {"scenario": "Rinascimento"})
+        game.add_event(existing)
+
+        with self.assertRaises(TypeError):
+            game.add_event("start_game|{}")  # type: ignore[arg-type]
+
+        self.assertEqual(game.turn_events, [existing])
+        self.assertIs(game.turn_events[0], existing)
 
 
 class TestGetUnitOwner(unittest.TestCase):

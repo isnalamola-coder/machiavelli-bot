@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import random
 import sqlite3
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
@@ -22,7 +21,6 @@ from .exceptions import (
 from .map import Map
 from .player import Player
 from .scenario import Scenario
-from .tables import GameTables
 
 
 @dataclass
@@ -42,7 +40,7 @@ class Game:
     famine: list[str] = field(default_factory=list)
     independent_garrisons: list[str] = field(default_factory=list)
     besieges: list[str] = field(default_factory=list)
-    turn_events: list[str] = field(default_factory=list)
+    turn_events: list[TurnEvent] = field(default_factory=list)
 
     def require_map(self) -> Map:
         """Return the loaded map or fail fast for an invalid game state."""
@@ -156,12 +154,17 @@ class Game:
 
         cursor.execute("DELETE FROM game_events WHERE game_id = ?", (self.database_id,))
         if self.turn_events:
+            if not all(isinstance(event, TurnEvent) for event in self.turn_events):
+                raise TypeError("El historial solo admite objetos TurnEvent")
             cursor.executemany(
                 """
-                INSERT INTO game_events (game_id, message)
-                VALUES (?, ?)
+                INSERT INTO game_events (game_id, event_type, data_json)
+                VALUES (?, ?, ?)
                 """,
-                [(self.database_id, message) for message in self.turn_events],
+                [
+                    (self.database_id, event.type.value, event.to_json())
+                    for event in self.turn_events
+                ],
             )
 
     def report_status(self) -> list[str]:
@@ -281,10 +284,22 @@ class Game:
 
         game.players = PlayerRepository(conn).get_by_game(game)
         cursor.execute(
-            "SELECT message FROM game_events WHERE game_id = ? ORDER BY id ASC",
+            """
+            SELECT id, event_type, data_json
+            FROM game_events
+            WHERE game_id = ?
+            ORDER BY id ASC
+            """,
             (game.database_id,),
         )
-        game.turn_events = [row[0] for row in cursor.fetchall()]
+        game.turn_events = [
+            TurnEvent.from_persisted(
+                row_id=row[0],
+                event_type=row[1],
+                data_json=row[2],
+            )
+            for row in cursor.fetchall()
+        ]
 
         if game.scenario_id:
             scenarios = Scenario.load_scenarios()
@@ -300,181 +315,6 @@ class Game:
             excluded_locations = None
         game.map = Map.load_map(exclude_ids=excluded_locations)
         return game
-
-    def initial_setup(self) -> list[str]:
-        """Perform the historical setup operations used by compatibility callers."""
-        if self.scenario is None or self.map is None:
-            raise ValueError("La partida requiere escenario y mapa para inicializarse")
-
-        report = ["### __Setup inicial__"]
-        self.turn_events.append("**Setup inicial**")
-        power_ids = list(self.scenario.powers)
-        random.shuffle(power_ids)
-        garrisons = [
-            key
-            for key, province in self.map.provinces.items()
-            if province.city == "fortified"
-        ]
-
-        for player, power_id in zip(self.players, power_ids, strict=False):
-            power = self.scenario.powers[power_id]
-            report.append(
-                f"<@{player.discord_id}> ({player.player_id}) dirigirá a {power.name}"
-            )
-            self.turn_events.append(
-                f"- <@{player.discord_id}> ({player.player_id}) dirigirá a {power.name}"
-            )
-            player.assign_power_from_scenario(power_id, power, power_ids)
-            garrisons = [
-                province
-                for province in garrisons
-                if province not in power.controlled_provinces
-            ]
-
-        self.independent_garrisons = garrisons
-        return report
-
-    def spring_start(self) -> list[str]:
-        """Resolve famine and income at the beginning of spring."""
-        if self.scenario is None or self.map is None:
-            raise ValueError("La partida requiere escenario y mapa")
-
-        report: list[str] = []
-        year = self.scenario.year + self.turn_number // 4
-        self.turn_events.append(f"\n__Primavera de {year}__")
-        self.famine = []
-
-        if self.scenario.rules.famine_active and self.turn_number > 0:
-            self.turn_events.append("**Fase de Hambre**")
-            report.append(f"### __Primavera de {year}: Hambre__")
-            dice = random.randint(1, 6)
-            famine = GameTables.disasters[dice - 1]
-            report.append(f"- **Fase de hambre**: 1d6 => {dice}. {famine[1]}")
-            self.turn_events.append(f"- **Hambre (=>{dice}):** {famine[1]}")
-
-            if famine[0] in ["both", "row"]:
-                dice = random.randint(1, 6) + random.randint(1, 6)
-                row = GameTables.famine[dice - 2]
-                famine_provinces = {
-                    key: province
-                    for key, province in self.map.provinces.items()
-                    if key in row
-                }
-                self.famine.extend(famine_provinces)
-                names = [province.name for province in famine_provinces.values()]
-                report.append(
-                    f"  * **Fila**: 2d6 => {dice}, **Hambre** en {', '.join(names)}"
-                )
-                joined_names = " y ".join([", ".join(names[:-1]), names[-1]])
-                self.turn_events.append(f"* **Fila (=>{dice}):** {joined_names}")
-
-            if famine[0] in ["both", "column"]:
-                dice = random.randint(1, 6) + random.randint(1, 6)
-                column = [row[dice - 2] for row in GameTables.famine]
-                famine_provinces = {
-                    key: province
-                    for key, province in self.map.provinces.items()
-                    if key in column
-                }
-                self.famine.extend(famine_provinces)
-                names = [province.name for province in famine_provinces.values()]
-                report.append(
-                    f"  * **Columna**: 2d6 => {dice}, **Hambre** en {', '.join(names)}"
-                )
-                joined_names = " y ".join([", ".join(names[:-1]), names[-1]])
-                self.turn_events.append(f"* **Fila (=>{dice}):** {joined_names}")
-
-        report.append(f"### __Primavera de {year}: Ingresos__")
-        self.turn_events.append("**Fase de Ingresos**")
-
-        for player in self.players:
-            if player.power is None:
-                raise ValueError("Todos los jugadores deben tener potencia asignada")
-            report.append(
-                f"- {GameTables.powers[player.power]} (<@{player.discord_id}>)"
-            )
-            self.turn_events.append(
-                f"- __{GameTables.powers[player.power]}__ (<@{player.discord_id}>)"
-            )
-
-            maybe_provinces = (
-                set(player.controlled_locations)
-                | set(player.armies)
-                | {fleet.split()[0] for fleet in player.fleets}
-            )
-            provinces = [
-                province
-                for province in maybe_provinces
-                if province not in self.famine
-                and province not in player.rebelled_provinces
-                and province not in player.rebelled_cities
-            ]
-            province_income = len(provinces)
-
-            maybe_cities = {
-                province
-                for province in player.controlled_locations
-                if province not in self.famine
-                and province not in player.rebelled_cities
-                and province not in player.rebelled_provinces
-            } | set(player.garrisons)
-            cities = [
-                city
-                for city in maybe_cities
-                if self.map.provinces[city].city in ("city", "fortified")
-            ]
-            city_income = sum(
-                self.map.provinces[city].major_city or 0 for city in cities
-            )
-            fixed_income = (
-                "  * **Ingresos fijos.** Por Provincias y Mares, "
-                f"{province_income} ducados. Por Ciudades, {city_income} ducados"
-            )
-            report.append(fixed_income)
-            self.turn_events.append(fixed_income)
-
-            variable_income = 0
-            for home_country in self.scenario.variable_income_home_countries:
-                if home_country in player.home_countries:
-                    dice = random.randint(1, 6)
-                    amount = GameTables.variable_income[home_country][dice - 1]
-                    report.append(
-                        "  * **Ingresos variables.** "
-                        f"{GameTables.powers[home_country]} (1d6 => {dice}), "
-                        f"{amount} ducados"
-                    )
-                    self.turn_events.append(
-                        "  * **Ingresos variables.** Por nación "
-                        f"{GameTables.powers[home_country]} (=>{dice}), "
-                        f"{amount} ducados"
-                    )
-                    variable_income += amount
-
-            for province in self.scenario.variable_income_provinces:
-                if province in player.controlled_locations:
-                    dice = random.randint(1, 6)
-                    amount = GameTables.variable_income[province][dice - 1]
-                    report.append(
-                        "  * **Ingresos variables.** "
-                        f"{self.map.provinces[province].name} (1d6 => {dice}), "
-                        f"{amount} ducados"
-                    )
-                    self.turn_events.append(
-                        "  * **Ingresos variables.** Por provincia "
-                        f"{self.map.provinces[province].name} (=>{dice}), "
-                        f"{amount} ducados"
-                    )
-                    variable_income += amount
-
-            total_income = province_income + city_income + variable_income
-            player.ducats += total_income
-            report.append(
-                f"  * **Total ingresos.** {province_income} + {city_income} + "
-                f"{variable_income} = {total_income} ducados"
-            )
-            self.turn_events.append(f"  * **Ingresos totales.** {total_income} ducados")
-
-        return report
 
     def turn_report(self) -> list[str]:
         """Return the public report for the current turn."""
@@ -523,8 +363,10 @@ class Game:
         return report
 
     def add_event(self, turn_event: TurnEvent) -> None:
-        """Append the persistable representation of a turn event."""
-        self.turn_events.append(turn_event.to_record())
+        """Append one validated event object without rendering or serialization."""
+        if not isinstance(turn_event, TurnEvent):
+            raise TypeError("El historial solo admite objetos TurnEvent")
+        self.turn_events.append(turn_event)
 
     def get_unit_owner(self, unit_id: str) -> Player | None:
         """Return the owner of a unit, or None for an independent garrison."""

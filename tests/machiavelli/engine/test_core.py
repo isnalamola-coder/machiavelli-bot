@@ -1,10 +1,21 @@
 """Pruebas de coordinación y barreras de error del motor de turnos."""
 
 import unittest
+from collections.abc import Mapping
+from random import Random
 from unittest.mock import Mock, call, patch
 
+import pytest
+
 from machiavelli.engine.core import GameEngine
+from machiavelli.engine.disasters import DisastersManager as RealDisastersManager
+from machiavelli.engine.income import IncomeManager as RealIncomeManager
 from machiavelli.engine.military import MilitaryResolutionError
+from machiavelli.events import EventType, TurnEvent
+from machiavelli.game.game import Game
+from machiavelli.game.map import Map
+from machiavelli.game.player import Player
+from machiavelli.game.scenario import Scenario
 
 
 class TestGameEngineRunStartup(unittest.TestCase):
@@ -127,7 +138,7 @@ class TestGameEngineRunCampaign(unittest.TestCase):
     @patch("machiavelli.engine.core.RebellionManager")
     @patch("machiavelli.engine.core.DisastersManager")
     @patch("machiavelli.engine.core.ExpenditureProcessor")
-    def test_run_campaign_season_2(
+    def test_run_campaign_season_2_runs_disaster_steps(
         self,
         mock_expenditure_cls,
         mock_disasters_cls,
@@ -383,6 +394,135 @@ class TestGameEngineRun(unittest.TestCase):
     #     """La integración no duplica todavía el algoritmo de mantenimiento."""
     #     self.engine.run_maintenance()
     #     self.mock_game.spring_maintenance.assert_called_once_with()
+
+
+class _TurnEventTrackingGame(Game):
+    """Track replacements of the ephemeral event-list object."""
+
+    def __init__(self, turn_number: int) -> None:
+        super().__init__(
+            name="tracking",
+            turn_number=turn_number,
+            turn_events=[TurnEvent(EventType.START_GAME, {"scenario": "before"})],
+        )
+        self.turn_event_replacements = 0
+        self.advance_calls = 0
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "turn_events" and hasattr(self, "turn_event_replacements"):
+            object.__setattr__(
+                self,
+                "turn_event_replacements",
+                self.turn_event_replacements + 1,
+            )
+        super().__setattr__(name, value)
+
+    def advance_turn(self) -> None:
+        self.advance_calls += 1
+
+
+@pytest.mark.parametrize(
+    ("turn_number", "phase_method"),
+    [(0, "run_startup"), (1, "run_maintenance"), (2, "run_campaign")],
+    ids=("startup", "maintenance", "campaign"),
+)
+def test_run_replaces_event_history_exactly_once(
+    turn_number: int, phase_method: str
+) -> None:
+    game = _TurnEventTrackingGame(turn_number)
+    previous_history = game.turn_events
+    engine = GameEngine(game)
+    produced = TurnEvent(EventType.START_SEASON, {"year": 1500, "season": 0})
+
+    with patch.object(
+        engine,
+        phase_method,
+        side_effect=lambda: game.turn_events.append(produced),
+    ):
+        engine.run()
+
+    assert game.turn_event_replacements == 1
+    assert game.turn_events is not previous_history
+    assert game.turn_events == [produced]
+    assert previous_history == [TurnEvent(EventType.START_GAME, {"scenario": "before"})]
+    assert game.advance_calls == 1
+
+
+def _real_engine_game() -> Game:
+    scenario = Scenario.load_scenarios()["Be"]
+    game = Game(
+        name="integrated-turn-events",
+        scenario_id="Be",
+        scenario=scenario,
+        map=Map.load_map(exclude_ids=scenario.excluded_locations),
+    )
+    game.players = [
+        Player(game, f"P{index + 1}", discord_id=10_000 + index)
+        for index in range(len(scenario.powers))
+    ]
+    return game
+
+
+def _payload_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Mapping):
+        return [item for nested in value.values() for item in _payload_strings(nested)]
+    if isinstance(value, tuple):
+        return [item for nested in value for item in _payload_strings(nested)]
+    return []
+
+
+@pytest.mark.parametrize(
+    ("turn_index", "phase"),
+    [(0, "startup"), (1, "maintenance"), (2, "campaign")],
+)
+def test_real_managers_produce_only_reconstructable_domain_events(
+    turn_index: int, phase: str
+) -> None:
+    game = _real_engine_game()
+
+    with (
+        patch(
+            "machiavelli.engine.core.DisastersManager",
+            side_effect=lambda active_game: RealDisastersManager(
+                active_game, Random(200)
+            ),
+        ),
+        patch(
+            "machiavelli.engine.core.IncomeManager",
+            side_effect=lambda active_game: RealIncomeManager(active_game, Random(300)),
+        ),
+    ):
+        for index in range(turn_index + 1):
+            GameEngine(game, rng=Random(100 + index)).run()
+
+    events = game.turn_events
+    rebuilt = [TurnEvent(type=event.type, data=event.data) for event in events]
+    types = [event.type for event in events]
+
+    assert events
+    assert rebuilt == events
+    assert all(isinstance(event, TurnEvent) for event in events)
+    assert all(event.type in EventType for event in events)
+    assert not any(
+        marker in value
+        for event in events
+        for value in _payload_strings(event.data)
+        for marker in ("**", "__", "`", "<@", "@everyone", "@here", "\n")
+    )
+
+    if phase == "startup":
+        assert types[0] is EventType.START_GAME
+        assert types[1:7] == [EventType.START_GAME_POWER_ASSIGNED] * 6
+        assert types[-6:] == [EventType.INCOME_COLLECTED] * 6
+    elif phase == "maintenance":
+        assert types.count(EventType.MAINTENANCE_SUMMARY) == 6
+        assert types.count(EventType.MAINTENANCE_ORDER_RESOLVED) >= 6
+        assert len(types) > len(set(types))
+    else:
+        assert types[0] is EventType.MILITARY_RESOLUTION
+        assert EventType.START_SEASON in types
 
 
 class TestGameEngineDislodgementBarrier(unittest.TestCase):

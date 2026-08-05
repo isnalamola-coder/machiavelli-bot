@@ -1663,7 +1663,7 @@ class MilitaryResolver:
         player_collections: dict[str, dict[str, list[str]]],
         independent: list[str],
         besieges: list[str],
-        event_record: str,
+        event: TurnEvent,
         rebellion_collections: dict[str, dict[str, list[str]]] | None = None,
     ) -> None:
         """Única frontera de commit: todos los valores ya están validados."""
@@ -1703,7 +1703,7 @@ class MilitaryResolver:
                 player.rebelled_cities = player_rebellions["city"]
             self.game.independent_garrisons = independent
             self.game.besieges = besieges
-            self.game.turn_events = [*self.game.turn_events, event_record]
+            self.game.turn_events = [*self.game.turn_events, event]
         except Exception as error:
             # El rollback es defensivo y restaura cada colección por separado.
             for player in self.game.players:
@@ -1725,17 +1725,24 @@ class MilitaryResolver:
                             name,
                             player.player_id,
                         )
-            for name, value in zip(
-                ("independent_garrisons", "besieges", "turn_events"),
-                previous_game,
-                strict=True,
-            ):
-                try:
-                    setattr(self.game, name, value)
-                except Exception:
-                    logging.getLogger(__name__).exception(
-                        "No se pudo restaurar %s del juego", name
-                    )
+            try:
+                self.game.independent_garrisons = previous_game[0]
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "No se pudo restaurar independent_garrisons del juego"
+                )
+            try:
+                self.game.besieges = previous_game[1]
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "No se pudo restaurar besieges del juego"
+                )
+            try:
+                self.game.turn_events = previous_game[2]
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "No se pudo restaurar turn_events del juego"
+                )
             raise MilitaryResolutionError("Falló el commit militar") from error
 
     def run(
@@ -1791,19 +1798,13 @@ class MilitaryResolver:
             besieges,
         )
 
-        # Fase 5: construir y serializar el registro auditable antes del commit.
+        # Fase 5: construir y validar el evento auditable antes del commit.
         event = self._event_from_resolution(
             resolution,
             state,
             rebellions=rebellion_events,
             sieges=siege_events,
         )
-        try:
-            event_record = event.to_record()
-        except Exception as error:
-            raise MilitaryResolutionError(
-                "No se pudo serializar el evento militar"
-            ) from error
         logging.getLogger(__name__).info(
             "Resolución militar: outcomes=%s cancelled=%s",
             len(resolution.outcomes),
@@ -1815,7 +1816,7 @@ class MilitaryResolver:
             collections,
             independent,
             besieges,
-            event_record,
+            event,
             rebellion_collections=rebellions,
         )
         return resolution

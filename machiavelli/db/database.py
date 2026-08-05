@@ -6,7 +6,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _UPGRADES: tuple[str, ...] = (
     # SCHEMA 1
@@ -67,7 +67,42 @@ _UPGRADES: tuple[str, ...] = (
             REFERENCES players(game_id, player_id) ON DELETE CASCADE
     );
     """,
+    # SCHEMA 4 -- executed statement by statement by _upgrade_to_v4().
+    """\
+    DROP TABLE game_events;
+    CREATE TABLE game_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+    );
+    """,
 )
+
+_V4_CREATE_GAME_EVENTS = """
+CREATE TABLE game_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+)
+"""
+
+
+def _upgrade_to_v4(conn: sqlite3.Connection) -> None:
+    """Replace only the ephemeral event table in one reversible transaction."""
+    cursor = conn.cursor()
+    cursor.execute("BEGIN")
+    try:
+        cursor.execute("DROP TABLE game_events")
+        cursor.execute(_V4_CREATE_GAME_EVENTS)
+        cursor.execute("PRAGMA user_version = 4")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def upgrade_connection(conn: sqlite3.Connection) -> None:
@@ -92,9 +127,14 @@ def upgrade_connection(conn: sqlite3.Connection) -> None:
         for version in range(current_version, _SCHEMA_VERSION):
             target_version = version + 1
             logger.info("Aplicando migración a versión %d...", target_version)
+            if target_version == 4:
+                conn.commit()
+                _upgrade_to_v4(conn)
+                continue
             cursor.executescript(_UPGRADES[version])
             cursor.execute(f"PRAGMA user_version = {target_version};")
-        conn.commit()
+        if target_version < 4:
+            conn.commit()
     except Exception:
         conn.rollback()
         logger.exception("Falló la actualización al esquema %d.", target_version)

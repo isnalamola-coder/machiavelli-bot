@@ -1,123 +1,341 @@
-# tests/machiavelli/engine/test_maintenance.py
+"""Tests for per-order maintenance events and summaries."""
 
-from __future__ import annotations
+from unittest.mock import Mock
 
-import unittest
-from unittest.mock import MagicMock
+import pytest
 
 from machiavelli.engine.maintenance import MaintenanceResolver
 from machiavelli.events import EventType
 from machiavelli.game.command import Command
+from machiavelli.game.game import Game
+from machiavelli.game.player import Player
 
 
-class DummyProvince:
-    def __init__(self, city="city", is_venice=False, has_port=True):
-        self.city = city
-        self.is_venice = is_venice
-        self.has_port = has_port
+def _game(*, ducats: int = 12) -> tuple[Game, Player]:
+    scenario = Mock()
+    scenario.province_home_country.return_value = "F"
+    game_map = Mock()
+    game_map.provinces = {
+        "flore": Mock(city="fortified", is_venice=False, has_port=True),
+        "pisa": Mock(city="city", is_venice=False, has_port=True),
+        "sienn": Mock(city="city", is_venice=False, has_port=False),
+    }
+    game = Game("maintenance", scenario=scenario, map=game_map)
+    player = Player(
+        game,
+        "P1",
+        controlled_locations=["flore", "pisa", "sienn"],
+        home_countries=["F"],
+        ducats=ducats,
+    )
+    game.players = [player]
+    return game, player
 
 
-class TestMaintenanceResolver(unittest.TestCase):
-    def setUp(self):
-        self.mock_game = MagicMock()
-        self.mock_player = MagicMock()
-        self.mock_player.player_id = "player_1"
-        self.mock_player.ducats = 20
-        self.mock_player.home_countries = ["Italy"]
-        self.mock_player.controlled_locations = ["rome", "flore"]
-        self.mock_player.armies = []
-        self.mock_player.fleets = []
-        self.mock_player.garrisons = []
-        self.mock_player.commands = []
-        self.mock_player.rebelled_cities = set()
+def _events(game: Game, event_type: EventType):
+    return [event for event in game.turn_events if event.type is event_type]
 
-        self.mock_game.players = [self.mock_player]
-        self.mock_game.scenario.province_home_country.side_effect = lambda p: (
-            "Italy" if p in ["rome", "flore"] else "Other"
-        )
-        self.mock_game.map.provinces = {
-            "rome": DummyProvince(city="city"),
-            "flore": DummyProvince(city="fortified"),
-            "venic": DummyProvince(city="city", has_port=True, is_venice=True),
-        }
 
-    def test_set_default_commands(self):
-        """Verifica que se asignan órdenes 'M' por defecto."""
-        self.mock_player.armies = ["rome"]
-        self.mock_player.fleets = ["venic"]
-        self.mock_player.commands = []
+_MAINTENANCE_RESULT_CASES = [
+    (
+        "disbanded",
+        "D",
+        "A flore",
+        3,
+        (["flore"], [], []),
+        None,
+        [],
+        0,
+        ([], [], []),
+    ),
+    (
+        "unit_not_found",
+        "D",
+        "A flore",
+        3,
+        ([], [], []),
+        None,
+        [],
+        0,
+        ([], [], []),
+    ),
+    (
+        "maintained",
+        "M",
+        "A flore",
+        3,
+        (["flore"], [], []),
+        None,
+        [],
+        3,
+        (["flore"], [], []),
+    ),
+    (
+        "disbanded_no_funds",
+        "M",
+        "A flore",
+        0,
+        (["flore"], [], []),
+        None,
+        [],
+        0,
+        ([], [], []),
+    ),
+    (
+        "recruited",
+        "R",
+        "A flore",
+        3,
+        ([], [], []),
+        None,
+        [],
+        3,
+        (["flore"], [], []),
+    ),
+    (
+        "recruitment_no_funds",
+        "R",
+        "A flore",
+        0,
+        ([], [], []),
+        None,
+        [],
+        0,
+        ([], [], []),
+    ),
+    (
+        "invalid_home_or_control",
+        "R",
+        "A pisa",
+        3,
+        ([], [], []),
+        ["flore", "sienn"],
+        [],
+        0,
+        ([], [], []),
+    ),
+    (
+        "space_occupied",
+        "R",
+        "A flore",
+        3,
+        (["flore"], [], []),
+        None,
+        [],
+        0,
+        (["flore"], [], []),
+    ),
+    (
+        "port_required",
+        "R",
+        "F sienn",
+        3,
+        ([], [], []),
+        None,
+        [],
+        0,
+        ([], [], []),
+    ),
+    (
+        "rebelled_city",
+        "R",
+        "G flore",
+        3,
+        ([], [], []),
+        None,
+        ["flore"],
+        0,
+        ([], [], []),
+    ),
+    (
+        "fortified_city_required",
+        "R",
+        "G pisa",
+        3,
+        ([], [], []),
+        None,
+        [],
+        0,
+        ([], [], []),
+    ),
+]
 
-        MaintenanceResolver._set_default_commands(self.mock_player)
 
-        commands_actors = {c.actor for c in self.mock_player.commands}
-        self.assertIn("A rome", commands_actors)
-        self.assertIn("F venic", commands_actors)
+@pytest.mark.parametrize(
+    (
+        "result",
+        "order",
+        "actor",
+        "available",
+        "initial_units",
+        "controlled_locations",
+        "rebelled_cities",
+        "expected_cost",
+        "expected_units",
+    ),
+    _MAINTENANCE_RESULT_CASES,
+    ids=[case[0] for case in _MAINTENANCE_RESULT_CASES],
+)
+def test_every_maintenance_result_emits_one_exact_attempt(
+    result: str,
+    order: str,
+    actor: str,
+    available: int,
+    initial_units: tuple[list[str], list[str], list[str]],
+    controlled_locations: list[str] | None,
+    rebelled_cities: list[str],
+    expected_cost: int,
+    expected_units: tuple[list[str], list[str], list[str]],
+) -> None:
+    assert {case[0] for case in _MAINTENANCE_RESULT_CASES} == {
+        "disbanded",
+        "unit_not_found",
+        "maintained",
+        "disbanded_no_funds",
+        "recruited",
+        "recruitment_no_funds",
+        "invalid_home_or_control",
+        "space_occupied",
+        "port_required",
+        "rebelled_city",
+        "fortified_city_required",
+    }
+    game, player = _game()
+    player.armies = list(initial_units[0])
+    player.fleets = list(initial_units[1])
+    player.garrisons = list(initial_units[2])
+    if controlled_locations is not None:
+        player.controlled_locations = controlled_locations
+    player.rebelled_cities = rebelled_cities
+    command = Command(game, player, actor, order, None)
+    resolver = MaintenanceResolver(game)
 
-    def test_run_successful_maintenance(self):
-        """Ejecuta correctamente el mantenimiento pagando las unidades existentes."""
-        self.mock_player.armies = ["rome"]
-        self.mock_player.ducats = 10
-        self.mock_player.commands = [
-            Command(self.mock_game, self.mock_player, "A rome", "M")
-        ]
+    if order == "D":
+        charged = resolver._disband(player, command)
+    elif order == "M":
+        charged = resolver._maintain(player, command, available)
+    else:
+        charged = resolver._recruit(player, command, available)
 
-        resolver = MaintenanceResolver(self.mock_game)
-        resolver.run()
+    assert charged == expected_cost
+    assert (player.armies, player.fleets, player.garrisons) == expected_units
+    assert len(game.turn_events) == 1
+    event = game.turn_events[0]
+    assert event.type is EventType.MAINTENANCE_ORDER_RESOLVED
+    assert event.data["result"] == result
+    assert event.data["cost"] == expected_cost
+    assert event.data["actor"] == actor
+    assert event.data["order"] == order
 
-        self.assertEqual(self.mock_player.ducats, 7)  # 10 - 3
-        self.mock_game.add_event.assert_called_once()
 
-        event_arg = self.mock_game.add_event.call_args[0][0]
-        self.assertEqual(event_arg.type, EventType.PLAYER_MAINTENANCE)
-        self.assertEqual(event_arg.data["expenses"], 3)
-        self.assertIn("A rome", event_arg.data["maintained"])
+def test_default_maintenance_emits_one_attempt_per_unit_and_summary() -> None:
+    game, player = _game(ducats=9)
+    player.armies = ["flore"]
+    player.fleets = ["pisa"]
+    player.garrisons = ["flore"]
 
-    def test_run_failed_maintenance_due_to_funds(self):
-        """Desbanca unidades si no hay suficientes ducados para mantenerlas."""
-        self.mock_player.armies = ["rome", "flore"]  # Coste total: 6
-        self.mock_player.ducats = 3  # Solo para una
-        self.mock_player.commands = [
-            Command(self.mock_game, self.mock_player, "A rome", "M"),
-            Command(self.mock_game, self.mock_player, "A flore", "M"),
-        ]
+    MaintenanceResolver(game).run()
 
-        resolver = MaintenanceResolver(self.mock_game)
-        resolver.run()
+    attempts = _events(game, EventType.MAINTENANCE_ORDER_RESOLVED)
+    assert [event.data["actor"] for event in attempts] == (
+        ["A flore", "F pisa", "G flore"]
+    )
+    assert [event.data["result"] for event in attempts] == [
+        "maintained",
+        "maintained",
+        "maintained",
+    ]
+    assert [event.data["cost"] for event in attempts] == [3, 3, 3]
+    summary = _events(game, EventType.MAINTENANCE_SUMMARY)[0]
+    assert dict(summary.data) == {
+        "player": "P1",
+        "initial_ducats": 9,
+        "expenses": 9,
+        "remaining_ducats": 0,
+    }
+    assert player.ducats == 0
 
-        self.assertEqual(self.mock_player.ducats, 0)
-        self.assertIn("rome", self.mock_player.armies)
-        self.assertNotIn("flore", self.mock_player.armies)
 
-        event_arg = self.mock_game.add_event.call_args[0][0]
-        self.assertIn("A flore", event_arg.data["failed_to_maintain"])
+def test_maintenance_without_funds_disbands_unit_and_records_zero_cost() -> None:
+    game, player = _game(ducats=0)
+    player.armies = ["flore"]
 
-    def test_run_successful_recruitment(self):
-        """Recluta con éxito una unidad si cumple condiciones y hay fondos."""
-        self.mock_player.armies = []
-        self.mock_player.ducats = 5
-        self.mock_player.commands = [
-            Command(self.mock_game, self.mock_player, "A rome", "R")
-        ]
+    MaintenanceResolver(game).run()
 
-        resolver = MaintenanceResolver(self.mock_game)
-        resolver.run()
+    attempt = _events(game, EventType.MAINTENANCE_ORDER_RESOLVED)[0]
+    assert attempt.data["result"] == "disbanded_no_funds"
+    assert attempt.data["cost"] == 0
+    assert player.armies == []
 
-        self.assertEqual(self.mock_player.ducats, 2)
-        self.assertIn("rome", self.mock_player.armies)
 
-        event_arg = self.mock_game.add_event.call_args[0][0]
-        self.assertIn("A rome", event_arg.data["recruited"])
+def test_explicit_disband_and_missing_unit_each_emit_an_attempt() -> None:
+    game, player = _game()
+    player.armies = ["flore"]
+    player.commands = [
+        Command(game, player, "A flore", "D", None),
+        Command(game, player, "F pisa", "D", None),
+    ]
 
-    def test_run_recruitment_failures(self):
-        """Valida que falle el reclutamiento por fondos insuficientes."""
-        self.mock_player.ducats = 2  # Menos de 3
-        self.mock_player.commands = [
-            Command(self.mock_game, self.mock_player, "A rome", "R")
-        ]
+    MaintenanceResolver(game).run()
 
-        resolver = MaintenanceResolver(self.mock_game)
-        resolver.run()
+    attempts = _events(game, EventType.MAINTENANCE_ORDER_RESOLVED)
+    assert [event.data["result"] for event in attempts] == [
+        "disbanded",
+        "unit_not_found",
+    ]
+    assert player.armies == []
 
-        event_arg = self.mock_game.add_event.call_args[0][0]
-        failed_reasons = dict(event_arg.data["failed_to_recruit"])
-        self.assertEqual(failed_reasons["A rome"], "no_enough_funds")
+
+def test_successful_recruitment_emits_cost_and_updates_units() -> None:
+    game, player = _game(ducats=6)
+    player.commands = [
+        Command(game, player, "A flore", "R", None),
+        Command(game, player, "F pisa", "R", None),
+    ]
+
+    MaintenanceResolver(game).run()
+
+    attempts = _events(game, EventType.MAINTENANCE_ORDER_RESOLVED)
+    assert [event.data["result"] for event in attempts] == ["recruited", "recruited"]
+    assert player.armies == ["flore"]
+    assert player.fleets == ["pisa"]
+    assert player.ducats == 0
+
+
+def test_recruitment_failures_use_closed_results_without_charging() -> None:
+    game, player = _game(ducats=3)
+    player.rebelled_cities = ["flore"]
+    player.commands = [
+        Command(game, player, "G flore", "R", None),
+        Command(game, player, "F sienn", "R", None),
+        Command(game, player, "G pisa", "R", None),
+    ]
+
+    MaintenanceResolver(game).run()
+
+    attempts = _events(game, EventType.MAINTENANCE_ORDER_RESOLVED)
+    assert [event.data["result"] for event in attempts] == [
+        "rebelled_city",
+        "port_required",
+        "fortified_city_required",
+    ]
+    assert [event.data["cost"] for event in attempts] == [0, 0, 0]
+    assert player.ducats == 3
+
+
+def test_recruitment_after_spending_all_funds_reports_no_funds() -> None:
+    game, player = _game(ducats=3)
+    player.armies = ["flore"]
+    player.commands = [
+        Command(game, player, "A flore", "M", None),
+        Command(game, player, "F pisa", "R", None),
+    ]
+
+    MaintenanceResolver(game).run()
+
+    attempts = _events(game, EventType.MAINTENANCE_ORDER_RESOLVED)
+    assert [event.data["result"] for event in attempts] == [
+        "maintained",
+        "recruitment_no_funds",
+    ]
+    assert player.ducats == 0

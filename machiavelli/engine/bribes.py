@@ -146,62 +146,101 @@ class BribeResolver:
             )
 
     def execute_bribe(self, bribe: Bribe) -> None:
-        """Aplica los efectos de un soborno"""
+        """Apply a validated bribe completely before recording its event."""
         target_type, target_location = bribe.target.split(maxsplit=1)
         target_key = target_location.split()[0]
+        owner = bribe.owner
+        fleet: str | None = None
 
-        self.game.add_event(
-            TurnEvent.expense(
-                EventType.BRIBE_EXECUTED,
-                actor=bribe.actor.player_id,
-                expense_type=bribe.command,
-                target=bribe.target,
-                amount=bribe.amount,
-            ),
+        event = TurnEvent.expense(
+            EventType.BRIBE_EXECUTED,
+            actor=bribe.actor.player_id,
+            expense_type=bribe.command,
+            target=bribe.target,
+            amount=bribe.amount,
         )
 
-        owner = bribe.owner
-        if bribe.command in {"I", "J", "K"} and owner is None:
-            raise ValueError("El soborno requiere una unidad con propietario")
+        if bribe.command in {"G", "H"}:
+            if target_type != "G" or owner is not None:
+                raise ValueError("El soborno requiere una guarnición independiente")
+            if target_key not in self.game.independent_garrisons:
+                raise ValueError("La guarnición independiente no existe")
+        elif bribe.command == "I":
+            if target_type != "G" or owner is None:
+                raise ValueError("El soborno requiere una guarnición con propietario")
+            if target_key not in owner.garrisons:
+                raise ValueError("La guarnición sobornada no pertenece al propietario")
+        elif bribe.command == "J":
+            if owner is None:
+                raise ValueError("El soborno requiere una unidad con propietario")
+            if target_type == "G":
+                if target_key not in owner.garrisons:
+                    raise ValueError(
+                        "La guarnición sobornada no pertenece al propietario"
+                    )
+            elif target_type == "A":
+                if target_key not in owner.armies:
+                    raise ValueError(
+                        "El ejército sobornado no pertenece al propietario"
+                    )
+            elif target_type == "F":
+                fleet = next(
+                    (item for item in owner.fleets if item.split()[0] == target_key),
+                    None,
+                )
+                if fleet is None:
+                    raise ValueError("La flota sobornada no pertenece al propietario")
+            else:
+                raise ValueError("Tipo de unidad sobornada inválido")
+        elif bribe.command == "K":
+            if owner is None:
+                raise ValueError("El soborno requiere una unidad con propietario")
+            if target_type == "A":
+                if target_key not in owner.armies:
+                    raise ValueError(
+                        "El ejército sobornado no pertenece al propietario"
+                    )
+            elif target_type == "F":
+                fleet = next(
+                    (item for item in owner.fleets if item.split()[0] == target_key),
+                    None,
+                )
+                if fleet is None:
+                    raise ValueError("La flota sobornada no pertenece al propietario")
+            else:
+                raise ValueError("La compra exige un ejército o una flota")
+        else:
+            raise ValueError(f"Tipo de soborno inválido: {bribe.command}")
 
         if bribe.command == "G":
-            # Desbandar guarnición autónoma
             self.game.independent_garrisons.remove(target_key)
         elif bribe.command == "H":
-            # Comprar guarnición autónoma
             self.game.independent_garrisons.remove(target_key)
             bribe.actor.garrisons.append(target_key)
         elif bribe.command == "I":
-            # Convertir guarnición en autónoma
-            if owner is None:
-                raise ValueError("La guarnición sobornada no tiene propietario")
+            assert owner is not None
             owner.garrisons.remove(target_key)
             self.game.independent_garrisons.append(target_key)
         elif bribe.command == "J":
-            # Desbandar unidad
-            if owner is None:
-                raise ValueError("La unidad sobornada no tiene propietario")
+            assert owner is not None
             if target_type == "G":
                 owner.garrisons.remove(target_key)
             elif target_type == "A":
                 owner.armies.remove(target_key)
-            elif target_type == "F":
-                owner.fleets = [
-                    fleet for fleet in owner.fleets if fleet.split()[0] != target_key
-                ]
-        elif bribe.command == "K":
-            # Comprar ejército o flota
-            if owner is None:
-                raise ValueError("La unidad sobornada no tiene propietario")
+            else:
+                assert fleet is not None
+                owner.fleets.remove(fleet)
+        else:
+            assert bribe.command == "K" and owner is not None
             if target_type == "A":
                 owner.armies.remove(target_key)
                 bribe.actor.armies.append(target_key)
-            elif target_type == "F":
-                fleet = [
-                    fleet for fleet in owner.fleets if fleet.split()[0] == target_key
-                ][0]
+            else:
+                assert fleet is not None
                 owner.fleets.remove(fleet)
                 bribe.actor.fleets.append(fleet)
+
+        self.game.add_event(event)
 
     def resolve_bribes(self) -> None:
         """Resuelve las sobornos de los jugadores."""

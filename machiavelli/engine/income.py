@@ -1,4 +1,4 @@
-# machiavelli/engine/incomes.py
+"""Income calculation and structured audit events."""
 
 from random import Random
 
@@ -9,89 +9,96 @@ from ..game.tables import GameTables
 
 
 class IncomeManager:
-    """Responsable del cálculo de ingresos del inicio de primavera."""
+    """Calculate spring income for every player."""
 
-    def __init__(self, game: Game, rng: Random | None = None):
-        """Constructor del manager."""
+    def __init__(self, game: Game, rng: Random | None = None) -> None:
         self.game = game
         self.rng = rng if rng is not None else Random()
 
-    def player_income(self, player: Player):
-        """Calcula los ingresos de un jugador."""
+    def _collect_player_income(self, player: Player) -> None:
+        """Apply one player's fixed and variable income and emit one event."""
+        game_map = self.game.require_map()
+        scenario = self.game.require_scenario()
 
-        # Provincias controladas u ocupadas por ejércitos y flotas
-        # Los mares no pueden ser controlados, pero sí ocupados
-        maybe_provinces = (
+        occupied_or_controlled = (
             set(player.controlled_locations)
             | set(player.armies)
             | {fleet.split()[0] for fleet in player.fleets}
         )
-
-        # Las provincias con hambre o con rebelión no proporcionan ingresos
-        provinces = [
+        provinces = sorted(
             province
-            for province in maybe_provinces
+            for province in occupied_or_controlled
             if province not in self.game.famine
             and province not in player.rebelled_provinces
             and province not in player.rebelled_cities
-        ]
+        )
         province_income = len(provinces)
 
-        # Las ciudades en provincias con hambre o rebelión tampoco,
-        # excepto si tienen guarnición
-        maybe_cities = {
+        possible_cities = {
             province
             for province in player.controlled_locations
             if province not in self.game.famine
             and province not in player.rebelled_cities
             and province not in player.rebelled_provinces
         } | set(player.garrisons)
-        cities = [
+        cities = sorted(
             city
-            for city in maybe_cities
-            if self.game.map.provinces[city].city in ("city", "fortified")
-        ]
-        # major_city es el ingreso por ciudad. Si no es mayor, vale 1
-        city_income = sum(
-            self.game.map.provinces[city].major_city or 0 for city in cities
+            for city in possible_cities
+            if game_map.provinces[city].city in ("city", "fortified")
         )
+        city_income = sum(game_map.provinces[city].major_city or 0 for city in cities)
 
-        fixed_income = province_income + city_income
-
+        variable_items: list[dict[str, object]] = []
         variable_income = 0
-        for home_country in self.game.scenario.variable_income_home_countries:
-            if home_country in player.home_countries:
-                dice = self.rng.randint(0, 5)
-                amount = GameTables.variable_income[home_country][dice]
-                variable_income += amount
+        for home_country in scenario.variable_income_home_countries:
+            if home_country not in player.home_countries:
+                continue
+            roll = self.rng.randint(1, 6)
+            amount = GameTables.variable_income[home_country][roll - 1]
+            variable_items.append(
+                {
+                    "source_type": "home_country",
+                    "source": home_country,
+                    "roll": roll,
+                    "amount": amount,
+                }
+            )
+            variable_income += amount
 
-        special_provinces = []
-        for province in self.game.scenario.variable_income_provinces:
-            if province in player.controlled_locations:
-                special_provinces.append(province)
-                dice = self.rng.randint(0, 5)
-                amount = GameTables.variable_income[province][dice]
-                variable_income += amount
+        for province in scenario.variable_income_provinces:
+            if province not in player.controlled_locations:
+                continue
+            roll = self.rng.randint(1, 6)
+            amount = GameTables.variable_income[province][roll - 1]
+            variable_items.append(
+                {
+                    "source_type": "province",
+                    "source": province,
+                    "roll": roll,
+                    "amount": amount,
+                }
+            )
+            variable_income += amount
 
-        total_income = fixed_income + variable_income
+        total_income = province_income + city_income + variable_income
         player.ducats += total_income
 
         self.game.add_event(
             TurnEvent(
-                type=EventType.PLAYER_INCOME,
+                type=EventType.INCOME_COLLECTED,
                 data={
                     "player": player.player_id,
-                    "locations": provinces,
+                    "provinces": provinces,
+                    "province_income": province_income,
                     "cities": cities,
-                    "home_countries": player.home_countries,
-                    "special_provinces": special_provinces,
-                    "fixed_income": fixed_income,
-                    "variable_income": variable_income,
+                    "city_income": city_income,
+                    "variable_income": variable_items,
+                    "total_income": total_income,
                 },
             )
         )
 
-    def run(self):
-        """Ejecuta la fase de ingresos y actualiza los recursos de los jugadores."""
+    def run(self) -> None:
+        """Calculate and apply income for all players in stable player order."""
         for player in self.game.players:
-            self.player_income(player)
+            self._collect_player_income(player)

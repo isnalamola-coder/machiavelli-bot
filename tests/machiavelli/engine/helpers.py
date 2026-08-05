@@ -6,6 +6,7 @@ from random import Random
 from unittest.mock import Mock
 
 from machiavelli.engine.core import GameEngine
+from machiavelli.events import EventType, TurnEvent
 from machiavelli.game.command import Command
 from machiavelli.game.game import Game
 from machiavelli.game.map import Map
@@ -19,6 +20,9 @@ class MilitaryOrdering:
 
     reverse_players: bool = False
     reverse_collections: bool = False
+
+
+BEFORE_EVENT = TurnEvent(EventType.START_GAME, {"scenario": "before"})
 
 
 MILITARY_ORDERINGS = (
@@ -70,6 +74,8 @@ def create_mock_game(
     """Crea un Mock con la especificación de Game y atributos por defecto."""
     game = Mock(spec=Game)
     game.players = players if players is not None else []
+    for player in game.players:
+        player.game = game
     game.independent_garrisons = (
         independent_garrisons if independent_garrisons is not None else []
     )
@@ -82,8 +88,11 @@ def create_mock_game(
     else:
         game.scenario = scenario
 
+    game.map = Mock()
     if provinces is not None:
         game.map.provinces = provinces
+    game.require_map.side_effect = lambda: game.map
+    game.require_scenario.side_effect = lambda: game.scenario
 
     return game
 
@@ -106,7 +115,7 @@ def create_military_game(
     | None = None,
     independent_garrisons: Iterable[str] = (),
     besieges: Iterable[str] = (),
-    turn_events: Iterable[str] = (),
+    turn_events: Iterable[TurnEvent | str] = (),
     name: str = "military-test",
     channel_id: int | None = None,
     scenario: Scenario | None = None,
@@ -119,7 +128,9 @@ def create_military_game(
         map=game_map,
         independent_garrisons=list(independent_garrisons),
         besieges=list(besieges),
-        turn_events=list(turn_events),
+        turn_events=[
+            BEFORE_EVENT if event == "before" else event for event in turn_events
+        ],
     )
 
     if players is None:

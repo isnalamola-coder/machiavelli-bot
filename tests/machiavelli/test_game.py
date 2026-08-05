@@ -70,10 +70,9 @@ def test_military_event_round_trip_preserves_six_lists(tmp_path):
         game.save(conn)
         loaded = Game.load_game(conn, game_id=game.database_id)
 
-    record = loaded.turn_events[-1]
-    prefix, payload = record.split("|", 1)
-    assert prefix == "military_resolution"
-    assert json.loads(payload) == event.data
+    loaded_event = loaded.turn_events[-1]
+    assert loaded_event == event
+    assert json.loads(loaded_event.to_json()) == json.loads(event.to_json())
 
 
 def test_military_event_is_canonical_compact_and_keeps_previous_records():
@@ -92,10 +91,14 @@ def test_military_event_is_canonical_compact_and_keeps_previous_records():
             [["M", "F", "alfa"], "beta", "lifted"],
         ],
     )
-    assert event.data["outcomes"][0][0] == ["M", "F", "alfa"]
-    assert event.data["cancelled_orders"] == [["M", "F", "alfa"], ["V", "A", "zeta"]]
-    assert event.to_record() == (
-        'military_resolution|{"broken_convoys":[["V","A","zeta"]],'
+    native = json.loads(event.to_json())
+    assert native["outcomes"][0][0] == ["M", "F", "alfa"]
+    assert native["cancelled_orders"] == [
+        ["M", "F", "alfa"],
+        ["V", "A", "zeta"],
+    ]
+    assert event.to_json() == (
+        '{"broken_convoys":[["V","A","zeta"]],'
         '"cancelled_orders":[["M","F","alfa"],["V","A","zeta"]],'
         '"dislodgements":[["M","F","alfa"]],'
         '"outcomes":[[["M","F","alfa"],"F","beta",false],'
@@ -105,9 +108,10 @@ def test_military_event_is_canonical_compact_and_keeps_previous_records():
         '"sieges":[[["M","F","alfa"],"beta","lifted"],'
         '[["V","A","zeta"],"ñ","started"]]}'
     )
-    assert TurnEvent.expense(EventType.EXPENSE, "M", "A", "a", 1).to_record() == str(
-        EventType.EXPENSE
-    )
+    assert json.loads(
+        TurnEvent.expense(EventType.EXPENSE, "M", "A", "a", 1).to_json()
+    ) == {"player": "M", "expense": "A", "target": "a", "amount": 1}
+    assert not hasattr(TurnEvent, "to_record")
 
 
 def test_military_event_rejects_non_primitive_or_malformed_lists():
@@ -131,8 +135,20 @@ def test_military_event_rejects_non_primitive_or_malformed_lists():
     for index in range(6):
         values = [[] for _ in range(6)]
         values[index] = ()
-        with pytest.raises(ValueError):
-            TurnEvent.military_resolution(*values)
+        event = TurnEvent.military_resolution(*values)
+        assert (
+            json.loads(event.to_json())[
+                (
+                    "outcomes",
+                    "cancelled_orders",
+                    "broken_convoys",
+                    "dislodgements",
+                    "rebellions",
+                    "sieges",
+                )[index]
+            ]
+            == []
+        )
 
 
 # Tests on database functions
@@ -178,8 +194,8 @@ def test_command_order_survives_repeated_loads_and_save_round_trip():
         ),
     }
 
-    assert canonical_database._SCHEMA_VERSION == 3
-    assert len(canonical_database._UPGRADES) == 3
+    assert canonical_database._SCHEMA_VERSION == 4
+    assert len(canonical_database._UPGRADES) == 4
 
     with TemporaryDirectory() as directory:
         db_path = Path(directory) / "commands.db"
@@ -217,7 +233,7 @@ def test_command_order_survives_repeated_loads_and_save_round_trip():
             conn.commit()
             after_second_save = Game.load_game(conn, game_id=game.database_id)
             assert command_rows(after_second_save) == expected
-            assert conn.execute("PRAGMA user_version").fetchone() == (3,)
+            assert conn.execute("PRAGMA user_version").fetchone() == (4,)
 
 
 # database on Player
@@ -338,7 +354,12 @@ def test_load_game_success():
                     (7,),
                 ),
                 call(
-                    "SELECT message FROM game_events WHERE game_id = ? ORDER BY id ASC",
+                    """
+            SELECT id, event_type, data_json
+            FROM game_events
+            WHERE game_id = ?
+            ORDER BY id ASC
+            """,
                     (7,),
                 ),
             ]

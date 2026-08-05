@@ -27,15 +27,23 @@ class DisastersManager:
         """Procesa los gastos de Paliar hambruna."""
         cost = GameTables.expenses["A"]["cost"]
         famine_relief_expenses = [
-            cmd
+            (player, command)
             for player in self.game.players
-            for cmd in player.commands
-            if cmd.actor == "E A" and int(cmd.command) >= cost
+            for command in player.commands
+            if command.actor == "E A" and int(command.command) >= cost
         ]
 
-        for exp in famine_relief_expenses:
-            if exp.target in self.game.famine:
-                self.game.famine.remove(exp.target)
+        for player, expense in famine_relief_expenses:
+            province = expense.target
+            if province not in self.game.famine:
+                continue
+            self.game.famine.remove(province)
+            self.game.add_event(
+                TurnEvent(
+                    EventType.FAMINE_RELIEF,
+                    {"player": player.player_id, "province": province},
+                )
+            )
 
     def _apply_disaster_deaths(
         self, event_type: EventType, provinces: list[str]
@@ -107,8 +115,8 @@ class DisastersManager:
         if event_type not in (EventType.FAMINE_SPAWN, EventType.PLAGUE_SPAWN):
             return []
 
-        severity_dice = self.rng.randint(0, 5)
-        severity = GameTables.disasters[severity_dice]
+        severity_roll = self.rng.randint(1, 6)
+        severity = GameTables.disasters[severity_roll - 1]
         provinces_table = (
             GameTables.famine
             if event_type == EventType.FAMINE_SPAWN
@@ -145,7 +153,10 @@ class DisastersManager:
             self.game.add_event(
                 TurnEvent(
                     type=event_type,
-                    data={"severity": severity_dice, "provinces": affected_provinces},
+                    data={
+                        "severity_roll": severity_roll,
+                        "provinces": affected_provinces,
+                    },
                 )
             )
 
