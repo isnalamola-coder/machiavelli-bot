@@ -39,6 +39,13 @@ class RebellionManager:
                 ("city", player.rebelled_cities),
             ):
                 if target in rebel_list:
+                    if kind == "city":
+                        province = self._map().provinces.get(target)
+                        if (
+                            province is not None
+                            and not self._scenario().is_defensible_city(province.city)
+                        ):
+                            continue
                     rebel_list.remove(target)
                     self.game.add_event(
                         TurnEvent(
@@ -63,17 +70,11 @@ class RebellionManager:
         if target in owner.rebelled_provinces or target in owner.rebelled_cities:
             return
 
-        # Determinamos los tipos de ciudad válidos según la regla fortress_active
         scenario = self._scenario()
         game_map = self._map()
-        valid_cities = (
-            ("fortified", "fortress")
-            if scenario.rules.fortress_active
-            else ("fortified",)
-        )
 
         if (
-            game_map.provinces[target].city in valid_cities
+            scenario.is_defensible_city(game_map.provinces[target].city)
             and target not in owner.garrisons
         ):
             # Si hay ciudad fortificada (o fuerte) sin guarnición, rebelión en la ciudad

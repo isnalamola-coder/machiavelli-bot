@@ -167,56 +167,6 @@ class Game:
                 ],
             )
 
-    def report_status(self) -> list[str]:
-        """Return the current public game status as report lines."""
-        report = [f"## __**Partida**: {self.name}__"]
-        report.append(
-            f"**Escenario:** {self.scenario.name if self.scenario else 'Por definir'}."
-        )
-        report.append(
-            f"**Horario de los turnos:** {self.weekly_deadline or 'Por definir'}."
-        )
-
-        if self.turn_number == 0:
-            report.append("### __**Estado:** Por comenzar.__")
-            if self.players:
-                players = ", ".join(
-                    f"<@{player.discord_id}> ({player.player_id})"
-                    for player in self.players
-                )
-                if self.scenario:
-                    report.append(
-                        f"**Jugadores {len(self.players)}/"
-                        f"{len(self.scenario.powers)}:** {players}"
-                    )
-                else:
-                    report.append(f"**Jugadores {len(self.players)}:** {players}")
-            else:
-                report.append("**Jugadores:** Ninguno")
-        else:
-            if self.scenario is None:
-                raise ValueError("Una partida iniciada debe tener escenario")
-            year = (self.turn_number - 1) // 4 + self.scenario.year
-            season = (
-                "Primavera (mantenimiento)",
-                "Primavera (campaña)",
-                "Verano",
-                "Otoño",
-            )[(self.turn_number - 1) % 4]
-            report.append(f"### __**Estado:** {season} de {year}__")
-            report.append("**Han enviado sus órdenes:**")
-            ordered_players = [player for player in self.players if player.commands]
-            if ordered_players:
-                report.extend(
-                    f"- <@{player.discord_id}> ({player.player_id})"
-                    for player in ordered_players
-                )
-            else:
-                report.append("- Nadie :wink:.")
-
-        report.append(f"**Próximo turno:** {self.next_deadline or 'Por definir'}.")
-        return report
-
     @classmethod
     def create_game(cls, name: str, channel_id: int, conn: sqlite3.Connection) -> Self:
         """Create and insert a game through the historical persistence facade."""
@@ -315,52 +265,6 @@ class Game:
             excluded_locations = None
         game.map = Map.load_map(exclude_ids=excluded_locations)
         return game
-
-    def turn_report(self) -> list[str]:
-        """Return the public report for the current turn."""
-        if self.scenario is None or self.map is None:
-            raise ValueError("La partida requiere escenario y mapa para informar")
-
-        year = self.scenario.year + (self.turn_number - 1) // 4
-        season = (
-            "Primavera (mantenimiento)",
-            "Primavera (campaña)",
-            "Verano",
-            "Otoño",
-        )[(self.turn_number - 1) % 4]
-        report = [
-            f"## 📜 {self.name}, turno {self.turn_number}",
-            f"### 🗓️ {season} de {year}",
-            "> ⚠️ **EVENTOS DEL TURNO ANTERIOR**",
-        ]
-        report.extend(f"> {event}" for event in self.turn_events)
-        report.append("## 🗺️ REPORTE DE SITUACIÓN")
-
-        if self.famine:
-            names = [
-                province.name
-                for key, province in self.map.provinces.items()
-                if key in self.famine
-            ]
-            famine = " y ".join([", ".join(names[:-1]), names[-1]])
-            report.append(f"🌾 **Hambre:** {famine}")
-
-        if self.independent_garrisons:
-            names = [
-                province.name
-                for key, province in self.map.provinces.items()
-                if key in self.independent_garrisons
-            ]
-            garrisons = (
-                " y ".join([", ".join(names[:-1]), names[-1]])
-                if len(names) > 1
-                else names[0]
-            )
-            report.append(f"🛡️ **Guarniciones independientes:** {garrisons}")
-
-        for player in self.players:
-            report.extend(player.player_report())
-        return report
 
     def add_event(self, turn_event: TurnEvent) -> None:
         """Append one validated event object without rendering or serialization."""

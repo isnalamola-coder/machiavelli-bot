@@ -19,6 +19,7 @@ def _game(*, ducats: int = 12) -> tuple[Game, Player]:
         "flore": Mock(city="fortified", is_venice=False, has_port=True),
         "pisa": Mock(city="city", is_venice=False, has_port=True),
         "sienn": Mock(city="city", is_venice=False, has_port=False),
+        "keep": Mock(city="fortress", is_venice=False, has_port=True),
     }
     game = Game("maintenance", scenario=scenario, map=game_map)
     player = Player(
@@ -321,6 +322,26 @@ def test_recruitment_failures_use_closed_results_without_charging() -> None:
     ]
     assert [event.data["cost"] for event in attempts] == [0, 0, 0]
     assert player.ducats == 3
+
+
+def test_fortress_never_allows_recruitment() -> None:
+    game, player = _game(ducats=6)
+    player.controlled_locations.append("keep")
+    player.commands = [
+        Command(game, player, "A keep", "R", None),
+        Command(game, player, "G keep", "R", None),
+    ]
+
+    MaintenanceResolver(game).run()
+
+    attempts = _events(game, EventType.MAINTENANCE_ORDER_RESOLVED)
+    assert [event.data["result"] for event in attempts] == [
+        "invalid_home_or_control",
+        "invalid_home_or_control",
+    ]
+    assert player.armies == []
+    assert player.garrisons == []
+    assert player.ducats == 6
 
 
 def test_recruitment_after_spending_all_funds_reports_no_funds() -> None:

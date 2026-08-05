@@ -2,10 +2,7 @@
 import asyncio
 import logging
 import os
-import sqlite3
 import traceback
-from collections.abc import Iterator
-from contextlib import closing, contextmanager
 from datetime import datetime
 
 import discord
@@ -13,12 +10,12 @@ from discord import app_commands
 
 from machiavelli.engine.exceptions import TooManyExpenses
 from machiavelli.engine.military import (
-    DislodgementResolver,
     DislodgementResolverRequired,
     InvalidMilitaryState,
     MilitaryResolutionError,
     UnresolvedMilitaryConflict,
 )
+from machiavelli.events import InvalidTurnEventError
 from machiavelli.game import (
     DuplicatedGameException,
     DuplicatePlayerException,
@@ -27,10 +24,14 @@ from machiavelli.game import (
 )
 from machiavelli.game.scenario import Scenario
 from machiavelli.game.tables import GameTables
-from machiavelli.repositories.game_repository import GameRepository
-from machiavelli.services import GameService
+from machiavelli.services import game_service_session
 
 logger = logging.getLogger(__name__)
+
+INVALID_TURN_HISTORY_MESSAGE = (
+    "No se pudo generar el informe porque el historial del turno no es válido.\n"
+    "Comunícaselo al administrador para que revise los eventos guardados."
+)
 
 # Estructura del documento (para orientarme)
 # 1. Grupos de comandos
@@ -101,16 +102,9 @@ def _require_channel_id(interaction: discord.Interaction) -> int:
     return channel_id
 
 
-@contextmanager
-def _service_session(db_path: str) -> Iterator[GameService]:
-    """Yield an application service whose SQLite connection is always closed."""
-    with closing(sqlite3.connect(db_path)) as conn:
-        yield GameService(GameRepository(conn))
-
-
 def _create_game_record(db_path: str, name: str, channel_id: int) -> tuple[str, int]:
     """Create one game through the application-service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         game = service.create_game(name=name, channel_id=channel_id)
         if game.database_id is None:
             raise RuntimeError("La partida creada no recibió un ID de persistencia")
@@ -124,7 +118,7 @@ def _add_player_record(
     player_id: str,
 ) -> tuple[str, list[tuple[str, int | None]]]:
     """Add one player and return the game name plus the authoritative roster."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         game_name = service.get_game(channel_id).name
         players = service.add_player(channel_id, discord_id, player_id)
         return game_name, players
@@ -136,7 +130,7 @@ def _remove_player_record(
     discord_id: int,
 ) -> tuple[str, str, list[tuple[str, int | None]]]:
     """Remove one player through the service and return the updated roster."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         game_name = service.get_game(channel_id).name
         player_id, players = service.remove_player(channel_id, discord_id)
         return game_name, player_id, players
@@ -148,7 +142,7 @@ def _set_scenario_record(
     scenario_id: str,
 ) -> tuple[str, str]:
     """Assign a scenario and return the game and scenario display names."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         game_name = service.get_game(channel_id).name
         scenario_name = service.set_scenario(channel_id, scenario_id)
         return game_name, scenario_name
@@ -161,7 +155,7 @@ def _update_deadlines_record(
     next_deadline: str | None,
 ) -> str:
     """Persist validated deadline strings through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return service.update_deadlines(
             channel_id,
             weekly_deadline=weekly_deadline,
@@ -171,13 +165,13 @@ def _update_deadlines_record(
 
 def _get_status_report(db_path: str, channel_id: int) -> tuple[str, ...]:
     """Load the public status report through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(service.get_status_report(channel_id))
 
 
 def _get_turn_report(db_path: str, channel_id: int) -> tuple[str, ...]:
     """Load the latest turn report through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(service.get_turn_report(channel_id))
 
 
@@ -187,7 +181,7 @@ def _get_player_commands(
     discord_id: int,
 ) -> tuple[str, tuple[str, ...]]:
     """Load one player's current command strings through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         player_id, commands = service.get_player_commands(channel_id, discord_id)
         return player_id, tuple(commands)
 
@@ -199,7 +193,7 @@ def _get_available_actors(
     selected_power: str | None,
 ) -> tuple[tuple[str, str], ...]:
     """Load actor choices through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(
             service.get_available_actors(channel_id, discord_id, selected_power)
         )
@@ -213,7 +207,7 @@ def _get_available_commands(
     selected_power: str | None,
 ) -> tuple[tuple[str, str], ...]:
     """Load command choices through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(
             service.get_available_commands(
                 channel_id,
@@ -233,7 +227,7 @@ def _get_available_targets(
     selected_power: str | None,
 ) -> tuple[tuple[str, str], ...]:
     """Load target choices through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(
             service.get_available_targets(
                 channel_id,
@@ -252,7 +246,7 @@ def _get_available_expenses(
     selected_power: str | None,
 ) -> tuple[tuple[str, str], ...]:
     """Load expense choices through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(
             service.get_available_expenses(channel_id, discord_id, selected_power)
         )
@@ -266,7 +260,7 @@ def _get_expense_targets(
     selected_power: str | None,
 ) -> tuple[tuple[str, str], ...]:
     """Load expense target choices through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(
             service.get_expense_targets(
                 channel_id,
@@ -286,7 +280,7 @@ def _get_expense_amounts(
     selected_power: str | None,
 ) -> tuple[tuple[str, str], ...]:
     """Load expense amount choices through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(
             service.get_expense_amounts(
                 channel_id,
@@ -300,7 +294,7 @@ def _get_expense_amounts(
 
 def _get_active_powers(db_path: str, channel_id: int) -> tuple[str, ...]:
     """Load assigned powers through the service boundary."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(service.get_active_powers(channel_id))
 
 
@@ -314,7 +308,7 @@ def _submit_command_record(
     selected_power: str | None = None,
 ) -> tuple[str, ...]:
     """Validate and persist one order through the application service."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(
             service.submit_command(
                 channel_id,
@@ -335,7 +329,7 @@ def _submit_expense_record(
     selected_power: str | None = None,
 ) -> tuple[str, ...]:
     """Validate and persist one expense through the application service."""
-    with _service_session(db_path) as service:
+    with game_service_session(db_path) as service:
         return tuple(
             service.submit_expense(
                 channel_id,
@@ -644,20 +638,18 @@ async def set_deadlines(
         )
 
 
-def _execute_game_turn(
-    db_path: str,
-    channel_id: int,
-    *,
-    dislodgement_resolver: DislodgementResolver | None = None,
-) -> tuple[str, ...]:
+def _execute_game_turn(db_path: str, channel_id: int) -> tuple[str, ...]:
     """Execute and persist one turn through the application-service boundary."""
-    with _service_session(db_path) as service:
-        return tuple(
-            service.run_turn(
-                channel_id,
-                dislodgement_resolver=dislodgement_resolver,
-            )
-        )
+    with game_service_session(db_path) as service:
+        return tuple(service.run_turn(channel_id))
+
+
+def _log_invalid_turn_event(error: InvalidTurnEventError) -> None:
+    """Log only the persisted row/type context allowed by the public contract."""
+    logger.error(
+        "Historial de turno inválido",
+        extra={"row_id": error.row_id, "event_type": error.event_type},
+    )
 
 
 def _military_error_message(error: MilitaryResolutionError) -> str:
@@ -702,6 +694,10 @@ async def run_game(interaction: discord.Interaction):
             )
         )
         return
+    except InvalidTurnEventError as error:
+        _log_invalid_turn_event(error)
+        await interaction.edit_original_response(content=INVALID_TURN_HISTORY_MESSAGE)
+        return
     except MilitaryResolutionError as error:
         # El diagnóstico completo queda en logs; el usuario recibe orientación segura.
         logger.exception(
@@ -710,10 +706,13 @@ async def run_game(interaction: discord.Interaction):
         )
         await interaction.edit_original_response(content=_military_error_message(error))
         return
-    except Exception as error:
-        error_detallado = format_error_with_location(error)
+    except Exception:
+        logger.exception("Error inesperado al ejecutar el turno")
         await interaction.edit_original_response(
-            content=f"**Error inesperado al ejecutar el turno:** {error_detallado}."
+            content=(
+                "No se pudo ejecutar el turno por un error interno. "
+                "Comunícaselo al administrador."
+            )
         )
         return
 
@@ -783,10 +782,17 @@ async def game_report(interaction: discord.Interaction):
             "**Error:** No hay ninguna partida activa en este canal.",
             ephemeral=True,
         )
-    except Exception as error:
+    except InvalidTurnEventError as error:
+        _log_invalid_turn_event(error)
         await interaction.followup.send(
-            "**Error inesperado al mostrar el informe:** "
-            f"`{type(error).__name__}: {error}`.",
+            INVALID_TURN_HISTORY_MESSAGE,
+            ephemeral=True,
+        )
+    except Exception:
+        logger.exception("Error inesperado al mostrar el informe del turno")
+        await interaction.followup.send(
+            "No se pudo mostrar el informe por un error interno. "
+            "Comunícaselo al administrador.",
             ephemeral=True,
         )
 

@@ -36,7 +36,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Run military performance gate
+      - name: Run independent performance gates
         run: >-
-          python -m pytest -q tests/machiavelli/engine/test_military.py
-          -k "representative_resolution_budget"
+          python -m pytest -q
+          tests/machiavelli/engine/test_military.py
+          tests/machiavelli/services/test_game_service.py
+          -k "representative_resolution_budget or turn_event_pipeline_budget"

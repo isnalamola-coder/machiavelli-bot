@@ -94,6 +94,23 @@ def test_income_records_each_variable_source_roll_and_amount(mock_tables: Mock) 
     assert player.ducats == 20
 
 
+def test_fortress_counts_as_province_but_never_as_income_city() -> None:
+    game, player = _income_game()
+    game.map.provinces["keep"] = Mock(city="fortress", major_city=4)
+    player.controlled_locations = ["keep"]
+    player.garrisons = ["keep"]
+
+    IncomeManager(game)._collect_player_income(player)
+
+    event = game.add_event.call_args.args[0]
+    assert event.data["provinces"] == ("keep",)
+    assert event.data["province_income"] == 1
+    assert event.data["cities"] == ()
+    assert event.data["city_income"] == 0
+    assert event.data["total_income"] == 1
+    assert player.ducats == 1
+
+
 def test_run_emits_one_income_event_per_player_in_order() -> None:
     first = create_mock_player("P1")
     second = create_mock_player("P2")

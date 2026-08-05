@@ -8,17 +8,11 @@ from .assassination import AssassinationResolver
 from .bribes import BribeResolver
 from .control import ControlManager
 from .disasters import DisastersManager
-from .exceptions import (
-    DuplicatePlayerError,
-    GameAlreadyStartedError,
-    InvalidPlayerCountError,
-    ScenarioNotSelectedError,
-    TurnExecutionFailed,
-)
+from .exceptions import GameInitializationError, TurnExecutionFailed
 from .expenditure import ExpenditureProcessor
 from .income import IncomeManager
 from .maintenance import MaintenanceResolver
-from .military import DislodgementResolver, MilitaryResolver
+from .military import MilitaryResolver
 from .rebellions import RebellionManager
 from .setup import SetupManager
 
@@ -30,12 +24,10 @@ class GameEngine:
         self,
         game: Game,
         rng: Random | None = None,
-        dislodgement_resolver: DislodgementResolver | None = None,
     ):
-        """Configura el motor y el gestor opcional de retiradas militares."""
+        """Configura el motor del turno y su fuente de aleatoriedad."""
         self.game = game
         self.rng = rng if rng is not None else Random()
-        self.dislodgement_resolver = dislodgement_resolver
 
     def run_startup(self) -> None:
         """Ejecutamos el flujo completo del inicio de la partida."""
@@ -47,18 +39,15 @@ class GameEngine:
         # 2. Se ejecuta el inicio de la primavera. La aparición de hambre y los ingresos
         try:
             SetupManager(self.game, self.rng).run()
-        except (
-            DuplicatePlayerError,
-            InvalidPlayerCountError,
-            ScenarioNotSelectedError,
-            GameAlreadyStartedError,
-        ) as e:
+        except GameInitializationError as e:
             raise TurnExecutionFailed(
                 f"Fallo en la inicialización de la partida: {e}"
             ) from e
 
-        # Una vez arrancada la partida, corremos las primeras fases
-        DisastersManager(self.game).spawn_famine()
+        # Una vez arrancada la partida, corremos las primeras fases.
+        rules = self.game.require_scenario().rules
+        if rules.famine_active and rules.first_turn_famine:
+            DisastersManager(self.game).spawn_famine()
         IncomeManager(self.game).run()
 
     def run_maintenance(self) -> None:
@@ -96,26 +85,39 @@ class GameEngine:
         # 9. Se calculan los ingresos (solo inicio de primavera, season==0)
         # 10. Se elimina el hambre (solo inicio de verano, season==2)
         # 11. Se resuelve la plaga (solo inicio de verano, season==2)
-        disaster_manager = DisastersManager(self.game)  # Lo usaremos varias veces
+        rules = self.game.require_scenario().rules
+        disaster_manager = (
+            DisastersManager(self.game)
+            if rules.famine_active or rules.plague_active
+            else None
+        )
 
         ExpenditureProcessor(self.game).run()
-        disaster_manager.process_famine_relief_expenses()
+        if rules.famine_active:
+            assert disaster_manager is not None
+            disaster_manager.process_famine_relief_expenses()
         RebellionManager(self.game).rebellion_expenses()
         BribeResolver(self.game).run()
-        AssassinationResolver(self.game).run()
+        if rules.assassinations_active:
+            AssassinationResolver(self.game).run()
         # Un fallo militar interrumpe la campaña antes de hambre, control y plaga.
-        MilitaryResolver(self.game).run(
-            dislodgement_resolver=self.dislodgement_resolver
-        )
-        if season == 2:
+        MilitaryResolver(self.game).run()
+        if season == 2 and rules.famine_active:
+            assert disaster_manager is not None
             disaster_manager.resolve_famine_attrition()
         ControlManager(self.game).run()
         if season == 0:
-            disaster_manager.spawn_famine()
+            if rules.famine_active:
+                assert disaster_manager is not None
+                disaster_manager.spawn_famine()
             IncomeManager(self.game).run()
         if season == 2:
-            disaster_manager.clear_famine()
-            disaster_manager.spawn_plague()
+            if rules.famine_active:
+                assert disaster_manager is not None
+                disaster_manager.clear_famine()
+            if rules.plague_active:
+                assert disaster_manager is not None
+                disaster_manager.spawn_plague()
 
     def run(self) -> None:
         """Ejecuta el flujo completo del turno actual.

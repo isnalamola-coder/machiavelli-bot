@@ -537,6 +537,92 @@ class TestAtomicResolution(unittest.TestCase):
                 MilitaryResolver(game).run()
         self.assertEqual(military_snapshot(game), before)
 
+    def test_final_garrison_collections_reject_non_defensible_destinations_atomically(
+        self,
+    ):
+        cases = (
+            ("player rural", "rural", None, "player"),
+            ("player ordinary city", "town", "city", "player"),
+            ("player inactive fortress", "keep", "fortress", "player"),
+            ("independent rural", "rural", None, "independent"),
+            ("independent ordinary city", "town", "city", "independent"),
+            ("independent inactive fortress", "keep", "fortress", "independent"),
+        )
+        for label, location, city, owner in cases:
+            with self.subTest(label):
+                game_map = military_map()
+                game_map.provinces[location] = Province(
+                    location,
+                    custom_id=location,
+                    city=city,
+                )
+                game = create_military_game(
+                    game_map,
+                    [{"player_id": "P1", "armies": ["a"]}],
+                    scenario=fortress_scenario(active=False),
+                    turn_events=["before"],
+                )
+                before = military_snapshot(game)
+                invalid_players = {"P1": {"A": [], "F": [], "G": []}}
+                invalid_independent: list[str] = []
+                if owner == "player":
+                    invalid_players["P1"]["G"] = [location]
+                else:
+                    invalid_independent = [location]
+                resolver = MilitaryResolver(game)
+
+                with (
+                    patch.object(
+                        resolver,
+                        "_build_final_collections",
+                        return_value=(invalid_players, invalid_independent, []),
+                    ),
+                    self.assertRaises(MilitaryResolutionError),
+                ):
+                    resolver.run()
+
+                self.assertEqual(military_snapshot(game), before)
+
+    def test_garrison_retreat_rejects_non_defensible_destination_before_append(self):
+        for location, city in (
+            ("rural", None),
+            ("town", "city"),
+            ("keep", "fortress"),
+        ):
+            with self.subTest(location):
+                game_map = military_map()
+                game_map.provinces[location] = Province(
+                    location,
+                    custom_id=location,
+                    city=city,
+                )
+                game = create_military_game(
+                    game_map,
+                    [{"player_id": "P1"}],
+                    scenario=fortress_scenario(active=False),
+                    turn_events=["before"],
+                )
+                before = military_snapshot(game)
+                key = UnitKey("P1", "G", "fort")
+                resolution = MilitaryResolution(
+                    (UnitOutcome(key, "G", None, True),),
+                    frozenset(),
+                )
+                players = {"P1": {"A": [], "F": [], "G": []}}
+                independent: list[str] = []
+
+                with self.assertRaises(MilitaryResolutionError):
+                    MilitaryResolver(game)._apply_dislodgement_decisions(
+                        resolution,
+                        {key: location},
+                        players,
+                        independent,
+                    )
+
+                self.assertEqual(players["P1"]["G"], [])
+                self.assertEqual(independent, [])
+                self.assertEqual(military_snapshot(game), before)
+
     def test_incomplete_resolution_stops_before_event_or_commit(self):
         game = self._game()
         before = military_snapshot(game)
@@ -1580,6 +1666,8 @@ class TestCyclesAndCancellationSemantics(unittest.TestCase):
             name: Province(name, custom_id=name)
             for name in ("o1", "p1", "p2", "o2", "a", "x", "q", "r", "y")
         }
+        provinces["x"].city = "fortified"
+        provinces["y"].city = "fortified"
         for origin, target in (
             ("o1", "p1"),
             ("p1", "o1"),
@@ -2579,11 +2667,8 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
             independent_garrisons=["keep"],
             scenario=fortress_scenario(active=False),
         )
-        resolver = self._compiled(invalid)
-        key = UnitKey("P1", "A", "keep")
-
-        self.assertEqual(resolver.orders_by_unit[key].order_type, "H")
-        self.assertIn(key, resolver.invalid_orders)
+        with self.assertRaises(InvalidMilitaryState):
+            self._compiled(invalid)
 
         persistent = create_military_game(
             fortress_map(),
@@ -3491,6 +3576,29 @@ class TestIntegratedMilitaryAcceptance(unittest.TestCase):
         self.assertTrue(
             all(observation == observations[0] for observation in observations)
         )
+
+
+def test_fortress_conversion_respects_scenario_rule() -> None:
+    active = create_military_game(
+        fortress_map(),
+        [{"player_id": "P1", "power": "M", "armies": ["keep"]}],
+        orders={"P1": [("A keep", "C", "G")]},
+        scenario=fortress_scenario(active=True),
+    )
+    inactive = create_military_game(
+        fortress_map(),
+        [{"player_id": "P1", "power": "M", "armies": ["keep"]}],
+        orders={"P1": [("A keep", "C", "G")]},
+        scenario=fortress_scenario(active=False),
+    )
+
+    MilitaryResolver(active).run()
+    MilitaryResolver(inactive).run()
+
+    assert active.players[0].armies == []
+    assert active.players[0].garrisons == ["keep"]
+    assert inactive.players[0].armies == ["keep"]
+    assert inactive.players[0].garrisons == []
 
 
 if __name__ == "__main__":

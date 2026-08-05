@@ -12,6 +12,8 @@ from .command import Command
 from .scenario import Power, Scenario
 
 if TYPE_CHECKING:
+    from machiavelli.engine.orders import OrderProcessingResult
+
     from .game import Game
 
 
@@ -193,8 +195,8 @@ class Player:
         self,
         turn_type: TurnType,
         command: Command,
-    ) -> list[str]:
-        """Compatibility facade over the central order processor."""
+    ) -> OrderProcessingResult:
+        """Return the structured result from the central order processor."""
         from machiavelli.engine.orders import OrderProcessor
 
         return OrderProcessor(self.game).process_command(self, turn_type, command)

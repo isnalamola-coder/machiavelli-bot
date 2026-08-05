@@ -7,11 +7,22 @@ import pytest
 from machiavelli.engine.exceptions import (
     DuplicatePlayerError,
     GameAlreadyStartedError,
+    GameInitializationError,
     InvalidPlayerCountError,
     ScenarioNotSelectedError,
 )
 from machiavelli.engine.setup import SetupManager
 from machiavelli.events import EventType, TurnEvent
+from machiavelli.game.game import Game
+from machiavelli.game.map import Map, Province
+from machiavelli.game.player import Player
+from machiavelli.game.scenario import (
+    HomeCountry,
+    Power,
+    Rules,
+    Scenario,
+    VictoryConditions,
+)
 
 from .helpers import create_mock_game, create_mock_player
 
@@ -162,3 +173,106 @@ def test_setup_successful_run():
     assert game.independent_garrisons == ["flore"]
     p1.assign_power_from_scenario.assert_called_once()
     p2.assign_power_from_scenario.assert_called_once()
+
+
+def _scenario_with_power(*, fortress_active: bool, assassinations_active: bool = True):
+    return Scenario(
+        name="rules",
+        year=1454,
+        victory_conditions=VictoryConditions(cities=1, home_countries=1),
+        rules=Rules(
+            fortress_active=fortress_active,
+            assassinations_active=assassinations_active,
+        ),
+        powers={
+            "M": Power(garrisons=["keep"]),
+        },
+    )
+
+
+def test_setup_rejects_declared_garrison_in_inactive_fortress_before_events():
+    player = create_mock_player("p1", discord_id=100)
+    game = create_mock_game(
+        turn_number=0,
+        players=[player],
+        scenario=_scenario_with_power(fortress_active=False),
+    )
+    game.map = Map(
+        provinces={
+            "keep": Province("Keep", custom_id="keep", city="fortress"),
+        },
+        seas={},
+    )
+
+    with pytest.raises(GameInitializationError, match="keep"):
+        SetupManager(game, rng=Random(1)).run()
+
+    game.add_event.assert_not_called()
+    player.assign_power_from_scenario.assert_not_called()
+
+
+def test_setup_accepts_declared_active_fortress_but_only_autofills_fortified():
+    player = create_mock_player("p1", discord_id=100)
+    game = create_mock_game(
+        turn_number=0,
+        players=[player],
+        scenario=_scenario_with_power(fortress_active=True),
+    )
+    game.map = Map(
+        provinces={
+            "keep": Province("Keep", custom_id="keep", city="fortress"),
+            "citadel": Province("Citadel", custom_id="citadel", city="fortified"),
+        },
+        seas={},
+    )
+
+    SetupManager(game, rng=Random(1)).run()
+
+    assert game.independent_garrisons == ["citadel"]
+    player.assign_power_from_scenario.assert_called_once()
+
+
+def test_setup_disables_assassination_counters_on_real_players():
+    scenario = Scenario(
+        name="rules",
+        year=1454,
+        victory_conditions=VictoryConditions(cities=2, home_countries=1),
+        rules=Rules(assassinations_active=False),
+        home_countries={
+            "M": HomeCountry(["milan"]),
+            "V": HomeCountry(["venic"]),
+        },
+        powers={
+            "M": Power(home_countries=["M"], armies=["milan"]),
+            "V": Power(home_countries=["V"], fleets=["venic"]),
+        },
+    )
+    game = Game(
+        "rules",
+        scenario_id="rules",
+        scenario=scenario,
+        map=Map(
+            provinces={
+                "milan": Province("Milan", custom_id="milan", city="fortified"),
+                "venic": Province(
+                    "Venice", custom_id="venic", city="fortified", has_port=True
+                ),
+            },
+            seas={},
+        ),
+    )
+    game.players = [
+        Player(game, "p1", discord_id=100),
+        Player(game, "p2", discord_id=200),
+    ]
+
+    SetupManager(game, rng=Random(1)).run()
+
+    assert all(player.ass_counters == [] for player in game.players)
+    assigned = {player.power: player for player in game.players}
+    assert assigned["M"].home_countries == ["M"]
+    assert assigned["M"].controlled_locations == ["milan"]
+    assert assigned["M"].armies == ["milan"]
+    assert assigned["V"].home_countries == ["V"]
+    assert assigned["V"].controlled_locations == ["venic"]
+    assert assigned["V"].fleets == ["venic"]

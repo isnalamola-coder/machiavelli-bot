@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 
 from machiavelli.engine.exceptions import TooManyExpenses
-from machiavelli.engine.orders import OrderProcessor
+from machiavelli.engine.orders import (
+    CommandSnapshot,
+    OrderChange,
+    OrderChangeKind,
+    OrderProcessingResult,
+    OrderProcessor,
+)
 from machiavelli.game import (
     DuplicatedGameException,
     FailedToStartError,
@@ -30,6 +36,16 @@ from machiavelli.game.game import (
 from machiavelli.game.game import TooManyExpenses as CompatibilityTooManyExpenses
 from machiavelli.game.map import Map, Province, Route, Sea
 from machiavelli.game.player import Player, TurnType
+from machiavelli.services.order_reporter import OrderReporter
+
+
+def snapshot(command: Command) -> CommandSnapshot:
+    """Capture the primitive command fields expected from the engine."""
+    return CommandSnapshot(
+        actor=command.actor,
+        command=command.command,
+        target=command.target,
+    )
 
 
 def make_command(
@@ -110,10 +126,15 @@ class TestMaintenanceTurn:
         game.turn_number = 1
         command = make_command(game, player, "A origin", "M")
 
-        report = player.cmd_add_command(TurnType.MAINTENANCE, command)
+        result = player.cmd_add_command(TurnType.MAINTENANCE, command)
 
         assert player.commands == [command]
-        assert report == [
+        assert result == OrderProcessingResult(
+            submitted=snapshot(command),
+            changes=(),
+            commands=(snapshot(command),),
+        )
+        assert OrderReporter.generate(result, game.require_map(), game.turn_number) == [
             f"Orden `{command}` enviada.",
             "**Órdenes recibidas hasta ahora:**",
             f"`{command}`",
@@ -128,15 +149,15 @@ class TestMaintenanceTurn:
         game.turn_number = 1
         current = make_command(game, player, "A origin", "M")
         player.add_command(current)
-        previous_text = str(current)
+        previous = snapshot(current)
         replacement = make_command(game, player, "A origin", "D")
 
-        report = processor.process_command(player, TurnType.MAINTENANCE, replacement)
+        result = processor.process_command(player, TurnType.MAINTENANCE, replacement)
 
         assert player.commands == [current]
         assert current.command == "D"
         assert current.target is None
-        assert report[1] == f"Sustituye la orden anterior `{previous_text}`."
+        assert result.changes == (OrderChange(OrderChangeKind.REPLACED, previous),)
 
     def test_disband_removes_order_for_new_unit(
         self,
@@ -194,14 +215,14 @@ class TestCampaignExpenses:
         game.turn_number = 2
         expense = make_command(game, player, "E 1", "5", "origin")
         player.add_command(expense)
-        previous_text = str(expense)
+        previous = snapshot(expense)
         update = make_command(game, player, "E 1", "3", "origin")
 
-        report = processor.process_command(player, TurnType.CAMPAIGN, update)
+        result = processor.process_command(player, TurnType.CAMPAIGN, update)
 
         assert player.commands == [expense]
         assert expense.command == "3"
-        assert report[1] == f"Sustituye la orden anterior `{previous_text}`."
+        assert result.changes == (OrderChange(OrderChangeKind.REPLACED, previous),)
 
     def test_zero_cost_removes_existing_expense(
         self,
@@ -212,13 +233,13 @@ class TestCampaignExpenses:
         game.turn_number = 2
         expense = make_command(game, player, "E 1", "5", "origin")
         player.add_command(expense)
-        previous_text = str(expense)
+        previous = snapshot(expense)
         removal = make_command(game, player, "E 1", "0", "origin")
 
-        report = processor.process_command(player, TurnType.CAMPAIGN, removal)
+        result = processor.process_command(player, TurnType.CAMPAIGN, removal)
 
         assert player.commands == []
-        assert report[1] == f"Elimina el gasto anterior `{previous_text}`."
+        assert result.changes == (OrderChange(OrderChangeKind.REMOVED, previous),)
 
     def test_more_than_four_expenses_raises_single_exception(
         self,
@@ -252,13 +273,13 @@ class TestCampaignOrders:
         game.turn_number = 2
         current = make_command(game, player, "A origin", "H")
         player.add_command(current)
-        previous_text = str(current)
+        previous = snapshot(current)
         replacement = make_command(game, player, "A origin", "A", "destination")
 
-        report = processor.process_command(player, TurnType.CAMPAIGN, replacement)
+        result = processor.process_command(player, TurnType.CAMPAIGN, replacement)
 
         assert player.commands == [replacement]
-        assert report[1] == f"Sustituye la orden anterior `{previous_text}`."
+        assert result.changes == (OrderChange(OrderChangeKind.REPLACED, previous),)
 
     def test_valid_convoy_appends_segment(
         self,
@@ -316,9 +337,14 @@ class TestCampaignOrders:
         garrison = make_command(game, player, "G fort", "H")
         player.commands = [army, fleet]
 
-        report = processor.process_command(player, TurnType.CAMPAIGN, garrison)
+        result = processor.process_command(player, TurnType.CAMPAIGN, garrison)
 
-        assert report == [
+        assert result == OrderProcessingResult(
+            submitted=snapshot(garrison),
+            changes=(),
+            commands=(snapshot(army), snapshot(fleet), snapshot(garrison)),
+        )
+        assert OrderReporter.generate(result, game.require_map(), game.turn_number) == [
             f"Orden `{garrison}` enviada.",
             "**Órdenes recibidas hasta ahora:**",
             f"`{army}`",

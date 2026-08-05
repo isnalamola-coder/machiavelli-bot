@@ -159,7 +159,7 @@ Resultado esperado en Ubuntu 24.04/CPython 3.13:
 python -m ruff format --check .
 python -m ruff check .
 python -m mypy machiavelli
-python -m pytest
+python -m pytest --cov=machiavelli --cov-report=term-missing --cov-fail-under=71
 ```
 
 Todos los comandos deben finalizar con código 0. La cobertura global no baja del

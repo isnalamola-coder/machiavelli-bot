@@ -9,12 +9,22 @@ from machiavelli.events import EventType
 from machiavelli.game.command import Command
 from machiavelli.game.game import Game
 from machiavelli.game.player import Player
+from machiavelli.game.scenario import Rules, Scenario, VictoryConditions
 
 
 def _game() -> tuple[Game, Player]:
     game_map = Mock()
     game_map.provinces = {key: Mock() for key in ("flore", "pisa", "rome")}
-    game = Game("disasters", map=game_map)
+    game = Game(
+        "disasters",
+        map=game_map,
+        scenario=Scenario(
+            name="rules",
+            year=1454,
+            victory_conditions=VictoryConditions(cities=1, home_countries=1),
+            rules=Rules(),
+        ),
+    )
     player = Player(game, "P1", ducats=20)
     game.players = [player]
     return game, player
@@ -167,3 +177,42 @@ def test_spawn_plague_applies_deaths_after_spawn() -> None:
     manager._apply_disaster_deaths.assert_called_once_with(
         event_type=EventType.PLAGUE_DEATH, provinces=["rome"]
     )
+
+
+def test_inactive_famine_makes_every_public_famine_operation_a_noop() -> None:
+    game, player = _game()
+    game.scenario.rules.famine_active = False
+    game.scenario.rules.first_turn_famine = True
+    game.famine = ["flore"]
+    player.armies = ["flore"]
+    player.commands = [Command(game, player, "E A", "3", "flore")]
+    manager = DisastersManager(game)
+    manager._spawn_disaster = Mock(return_value=["pisa"])  # type: ignore[method-assign]
+    manager._apply_disaster_deaths = Mock()  # type: ignore[method-assign]
+
+    manager.process_famine_relief_expenses()
+    manager.resolve_famine_attrition()
+    manager.clear_famine()
+    manager.spawn_famine()
+
+    assert game.famine == ["flore"]
+    assert player.armies == ["flore"]
+    assert game.turn_events == []
+    manager._spawn_disaster.assert_not_called()
+    manager._apply_disaster_deaths.assert_not_called()
+
+
+def test_inactive_plague_skips_spawn_deaths_and_events() -> None:
+    game, player = _game()
+    game.scenario.rules.plague_active = False
+    player.armies = ["rome"]
+    manager = DisastersManager(game)
+    manager._spawn_disaster = Mock(return_value=["rome"])  # type: ignore[method-assign]
+    manager._apply_disaster_deaths = Mock()  # type: ignore[method-assign]
+
+    manager.spawn_plague()
+
+    assert player.armies == ["rome"]
+    assert game.turn_events == []
+    manager._spawn_disaster.assert_not_called()
+    manager._apply_disaster_deaths.assert_not_called()

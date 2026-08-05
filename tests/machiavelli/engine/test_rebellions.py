@@ -12,6 +12,10 @@ def _game() -> Mock:
     game = Mock()
     game.add_event = Mock()
     game.scenario.rules.fortress_active = True
+    game.scenario.is_defensible_city.side_effect = lambda city: (
+        city == "fortified"
+        or (city == "fortress" and game.scenario.rules.fortress_active)
+    )
     game.scenario.province_home_country.return_value = "M"
     game.map.provinces = {"pisa": Mock(city="fortified")}
     return game
@@ -61,6 +65,47 @@ def test_pacify_non_rebelled_target_emits_nothing() -> None:
 
     RebellionManager(game).expense_rebellion_pacify(Mock(target="rome"))
 
+    game.add_event.assert_not_called()
+
+
+def test_active_fortress_pacifies_city_rebellion_with_exact_event() -> None:
+    game = _game()
+    game.scenario.rules.fortress_active = True
+    game.map.provinces["pisa"].city = "fortress"
+    owner = Mock(
+        player_id="FLORENCE",
+        rebelled_provinces=[],
+        rebelled_cities=["pisa"],
+    )
+    game.players = [owner]
+
+    RebellionManager(game).expense_rebellion_pacify(Mock(target="pisa"))
+
+    assert owner.rebelled_cities == []
+    event = game.add_event.call_args.args[0]
+    assert isinstance(event, TurnEvent)
+    assert event.type is EventType.REBELLION_PACIFY
+    assert dict(event.data) == {
+        "player": "FLORENCE",
+        "province": "pisa",
+        "kind": "city",
+    }
+
+
+def test_inactive_fortress_does_not_pacify_residual_city_rebellion() -> None:
+    game = _game()
+    game.scenario.rules.fortress_active = False
+    game.map.provinces["pisa"].city = "fortress"
+    owner = Mock(
+        player_id="FLORENCE",
+        rebelled_provinces=[],
+        rebelled_cities=["pisa"],
+    )
+    game.players = [owner]
+
+    RebellionManager(game).expense_rebellion_pacify(Mock(target="pisa"))
+
+    assert owner.rebelled_cities == ["pisa"]
     game.add_event.assert_not_called()
 
 

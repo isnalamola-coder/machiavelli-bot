@@ -4,10 +4,15 @@
 
 ```python
 type FrozenJSONValue = (
-    None | bool | int | float | str |
-    tuple["FrozenJSONValue", ...] |
-    Mapping[str, "FrozenJSONValue"]
+    None
+    | bool
+    | int
+    | float
+    | str
+    | tuple["FrozenJSONValue", ...]
+    | Mapping[str, "FrozenJSONValue"]
 )
+
 
 @dataclass(frozen=True, slots=True)
 class TurnEvent:
@@ -46,6 +51,7 @@ bypass validation.
 
 ```python
 turn_events: list[TurnEvent]
+
 
 def add_event(self, event: TurnEvent) -> None: ...
 ```
@@ -134,6 +140,7 @@ all six groups are empty, the event remains valid and produces exactly one line:
 ```python
 @contextmanager
 def game_service_session(db_path: str | Path) -> Iterator[GameService]: ...
+
 
 class GameService:
     def run_turn(self, channel_id: int) -> list[str]: ...

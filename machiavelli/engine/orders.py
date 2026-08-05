@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING, Self
 
 from machiavelli.engine.exceptions import TooManyExpenses
 from machiavelli.game.map import MovementMode, Province
@@ -12,6 +14,48 @@ if TYPE_CHECKING:
     from machiavelli.game.command import Command
     from machiavelli.game.game import Game
     from machiavelli.game.player import Player
+
+
+@dataclass(frozen=True, slots=True)
+class CommandSnapshot:
+    """Immutable command data captured before or after an order mutation."""
+
+    actor: str
+    command: str
+    target: str | None
+
+    @classmethod
+    def from_command(cls, command: Command) -> Self:
+        """Capture the primitive fields required by service-layer reporting."""
+        return cls(
+            actor=command.actor,
+            command=command.command,
+            target=command.target,
+        )
+
+
+class OrderChangeKind(Enum):
+    """Describe how an existing registered order changed."""
+
+    REPLACED = "replaced"
+    REMOVED = "removed"
+
+
+@dataclass(frozen=True, slots=True)
+class OrderChange:
+    """One structured change to an order that existed before submission."""
+
+    kind: OrderChangeKind
+    previous: CommandSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class OrderProcessingResult:
+    """Structured result of registering one command."""
+
+    submitted: CommandSnapshot
+    changes: tuple[OrderChange, ...]
+    commands: tuple[CommandSnapshot, ...]
 
 
 class OrderProcessor:
@@ -25,24 +69,29 @@ class OrderProcessor:
         player: Player,
         turn_type: TurnType,
         command: Command,
-    ) -> list[str]:
-        """Register one order and return its user-facing report in stable order."""
-        report = [f"Orden `{command}` enviada."]
+    ) -> OrderProcessingResult:
+        """Register one order and return only structured domain data."""
+        submitted = CommandSnapshot.from_command(command)
 
         if turn_type == TurnType.MAINTENANCE:
-            report.extend(self._handle_maintenance_command(player, command))
+            changes = self._handle_maintenance_command(player, command)
         else:
-            report.extend(self._handle_campaign_command(player, command))
+            changes = self._handle_campaign_command(player, command)
 
-        report.append("**Órdenes recibidas hasta ahora:**")
-        report.extend(f"`{registered}`" for registered in player.commands)
-        return report
+        return OrderProcessingResult(
+            submitted=submitted,
+            changes=changes,
+            commands=tuple(
+                CommandSnapshot.from_command(registered)
+                for registered in player.commands
+            ),
+        )
 
     def _handle_maintenance_command(
         self,
         player: Player,
         command: Command,
-    ) -> list[str]:
+    ) -> tuple[OrderChange, ...]:
         """Register a maintenance order, keeping at most one row per actor."""
         current_commands = [
             current for current in player.commands if current.actor == command.actor
@@ -53,14 +102,12 @@ class OrderProcessor:
             )
 
         if not current_commands:
-            # A disband order only has meaning when it replaces the default order of a
-            # newly created unit. The historical implementation ignored a standalone D.
             if command.command != "D":
                 player.add_command(command)
-            return []
+            return ()
 
         current = current_commands[0]
-        messages = [f"Sustituye la orden anterior `{current}`."]
+        previous = CommandSnapshot.from_command(current)
         current.command = command.command
         current.target = command.target
 
@@ -73,13 +120,13 @@ class OrderProcessor:
         if is_new_unit and command.command == "D":
             player.remove_command(current)
 
-        return messages
+        return (OrderChange(OrderChangeKind.REPLACED, previous),)
 
     def _handle_campaign_command(
         self,
         player: Player,
         command: Command,
-    ) -> list[str]:
+    ) -> tuple[OrderChange, ...]:
         """Register a campaign order, expense update, or convoy segment."""
         actor_type, _actor_id = command.actor.split()
         if actor_type == "E":
@@ -90,25 +137,29 @@ class OrderProcessor:
         ]
         if not current_commands:
             player.add_command(command)
-            return []
+            return ()
 
         if self._validate_convoy(player, command, actor_type, current_commands):
             player.add_command(command)
-            return []
+            return ()
 
-        messages = [
-            f"Sustituye la orden anterior `{current}`." for current in current_commands
-        ]
+        changes = tuple(
+            OrderChange(
+                kind=OrderChangeKind.REPLACED,
+                previous=CommandSnapshot.from_command(current),
+            )
+            for current in current_commands
+        )
         for current in current_commands:
             player.remove_command(current)
         player.add_command(command)
-        return messages
+        return changes
 
     def _handle_expense_command(
         self,
         player: Player,
         command: Command,
-    ) -> list[str]:
+    ) -> tuple[OrderChange, ...]:
         """Create, update, or remove one campaign expense."""
         expense = next(
             (
@@ -119,14 +170,13 @@ class OrderProcessor:
             None,
         )
         if expense is not None:
+            previous = CommandSnapshot.from_command(expense)
             if int(command.command) == 0:
-                message = f"Elimina el gasto anterior `{expense}`."
                 player.remove_command(expense)
-                return [message]
+                return (OrderChange(OrderChangeKind.REMOVED, previous),)
 
-            message = f"Sustituye la orden anterior `{expense}`."
             expense.command = command.command
-            return [message]
+            return (OrderChange(OrderChangeKind.REPLACED, previous),)
 
         expense_count = sum(
             current.actor.startswith("E ") for current in player.commands
@@ -135,7 +185,7 @@ class OrderProcessor:
             raise TooManyExpenses()
 
         player.add_command(command)
-        return []
+        return ()
 
     def _validate_convoy(
         self,

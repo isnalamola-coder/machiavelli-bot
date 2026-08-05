@@ -2,20 +2,32 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from machiavelli.game.tables import GameTables
 
 if TYPE_CHECKING:
-    from machiavelli.game.command import Command
     from machiavelli.game.map import Location, Map, Province
+
+
+class CommandData(Protocol):
+    """Structural command fields accepted by presentation helpers."""
+
+    @property
+    def actor(self) -> str: ...
+
+    @property
+    def command(self) -> str: ...
+
+    @property
+    def target(self) -> str | None: ...
 
 
 class CommandReporter:
     """Generate readable representations of player commands."""
 
     @staticmethod
-    def format_report(command: Command, game_map: Map, turn_number: int) -> str:
+    def format_report(command: CommandData, game_map: Map, turn_number: int) -> str:
         """Return a human-readable command description separated by ``|``."""
         locations: dict[str, Location] = dict(game_map.provinces)
         locations.update(game_map.seas)
@@ -73,7 +85,7 @@ class CommandReporter:
     @staticmethod
     def _append_target_report(
         report: list[str],
-        command: Command,
+        command: CommandData,
         target_type: str,
         locations: dict[str, Location],
         provinces: dict[str, Province],

@@ -32,7 +32,7 @@ class DuplicatePlayerError(GameInitializationError):
         if player_id:
             message.append(f"ID: {player_id}.")
         if discord_id:
-            message.append(f"Discord: <@{discord_id}>.")
+            message.append(f"Discord ID: {discord_id}.")
         super().__init__(" ".join(message))
         self.player_id = player_id
         self.discord_id = discord_id

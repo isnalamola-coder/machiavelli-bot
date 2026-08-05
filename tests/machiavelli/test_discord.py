@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import ast
+import asyncio
+import inspect
 import os
 import subprocess
 import sys
+import threading
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from machiavelli import database
+from machiavelli import discord as discord_adapter
 from machiavelli.discord import (
     _add_player_record,
     _chunk_lines,
@@ -20,7 +25,6 @@ from machiavelli.discord import (
     _get_player_commands,
     _get_status_report,
     _get_turn_report,
-    _service_session,
     _set_scenario_record,
     _submit_command_record,
     _submit_expense_record,
@@ -41,11 +45,13 @@ from machiavelli.engine.military import (
     MilitaryResolutionError,
     UnresolvedMilitaryConflict,
 )
+from machiavelli.events import InvalidTurnEventError
 from machiavelli.game import (
     DuplicatePlayerException,
     GameNotFoundException,
     PlayerNotFoundException,
 )
+from machiavelli.services import game_service_session
 
 
 def make_interaction(*, channel_id: int = 321, discord_id: int = 654) -> Mock:
@@ -63,40 +69,66 @@ def make_interaction(*, channel_id: int = 321, discord_id: int = 654) -> Mock:
 
 
 class TestServiceWorkers(unittest.TestCase):
-    """Verify that synchronous workers own and close their service session."""
+    """Verify that every synchronous helper uses the canonical service session."""
 
-    @patch("machiavelli.discord.sqlite3.connect")
-    def test_service_session_always_closes_connection(self, mock_connect: Mock) -> None:
-        connection = mock_connect.return_value
+    def test_all_synchronous_helpers_use_game_service_session(self) -> None:
+        helper_names = {
+            "_create_game_record",
+            "_add_player_record",
+            "_remove_player_record",
+            "_set_scenario_record",
+            "_update_deadlines_record",
+            "_get_status_report",
+            "_get_turn_report",
+            "_get_player_commands",
+            "_get_available_actors",
+            "_get_available_commands",
+            "_get_available_targets",
+            "_get_available_expenses",
+            "_get_expense_targets",
+            "_get_expense_amounts",
+            "_get_active_powers",
+            "_submit_command_record",
+            "_submit_expense_record",
+            "_execute_game_turn",
+        }
+        module = ast.parse(Path(discord_adapter.__file__).read_text(encoding="utf-8"))
+        functions = {
+            node.name: node
+            for node in module.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
 
-        with _service_session("game.db") as service:
-            self.assertIs(service.repo.conn, connection)
+        self.assertTrue(helper_names <= functions.keys())
+        for helper_name in sorted(helper_names):
+            with self.subTest(helper=helper_name):
+                calls = {
+                    node.func.id
+                    for node in ast.walk(functions[helper_name])
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                }
+                self.assertIn("game_service_session", calls)
 
-        mock_connect.assert_called_once_with("game.db")
-        connection.close.assert_called_once_with()
+    def test_run_game_worker_signature_has_no_dislodgement_policy(self) -> None:
+        self.assertEqual(
+            list(inspect.signature(_execute_game_turn).parameters),
+            ["db_path", "channel_id"],
+        )
 
     def test_run_game_worker_delegates_to_service(self) -> None:
         service = Mock(name="service")
         service.run_turn.return_value = ["line one", "line two"]
-        resolver = Mock(name="resolver")
 
         @contextmanager
         def fake_session(db_path: str):
             self.assertEqual(db_path, "game.db")
             yield service
 
-        with patch("machiavelli.discord._service_session", fake_session):
-            report = _execute_game_turn(
-                "game.db",
-                123,
-                dislodgement_resolver=resolver,
-            )
+        with patch("machiavelli.discord.game_service_session", fake_session):
+            report = _execute_game_turn("game.db", 123)
 
         self.assertEqual(report, ("line one", "line two"))
-        service.run_turn.assert_called_once_with(
-            123,
-            dislodgement_resolver=resolver,
-        )
+        service.run_turn.assert_called_once_with(123)
 
     def test_run_game_worker_propagates_atomic_failure(self) -> None:
         service = Mock(name="service")
@@ -108,7 +140,7 @@ class TestServiceWorkers(unittest.TestCase):
             yield service
 
         with (
-            patch("machiavelli.discord._service_session", fake_session),
+            patch("machiavelli.discord.game_service_session", fake_session),
             self.assertRaises(InvalidMilitaryState) as caught,
         ):
             _execute_game_turn("game.db", 123)
@@ -133,7 +165,7 @@ class TestServiceWorkers(unittest.TestCase):
                 "Florencia",
             )
 
-            with _service_session(db_path) as service:
+            with game_service_session(db_path) as service:
                 game = service.get_game(8080)
                 game.turn_number = 2
                 game.players[0].armies = ["milan"]
@@ -310,14 +342,22 @@ class TestReports(unittest.IsolatedAsyncioTestCase):
             ephemeral=False,
         )
 
-    async def test_game_report_is_private(self) -> None:
+    async def test_game_report_is_private_and_chunks_in_order(self) -> None:
         interaction = make_interaction()
+        report = ("report one", "report two")
+        chunks = ["private chunk one", "private chunk two"]
 
-        with patch(
-            "machiavelli.discord.asyncio.to_thread",
-            new_callable=AsyncMock,
-            return_value=("report one", "report two"),
-        ) as mock_to_thread:
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new_callable=AsyncMock,
+                return_value=report,
+            ) as mock_to_thread,
+            patch(
+                "machiavelli.discord._chunk_lines",
+                return_value=chunks,
+            ) as mock_chunk_lines,
+        ):
             await game_report.callback(interaction)
 
         interaction.response.defer.assert_awaited_once_with(ephemeral=True)
@@ -326,10 +366,57 @@ class TestReports(unittest.IsolatedAsyncioTestCase):
             game_group.db_path,
             interaction.channel_id,
         )
+        mock_chunk_lines.assert_called_once_with(report)
+        self.assertEqual(
+            interaction.followup.send.await_args_list,
+            [
+                call("private chunk one", ephemeral=True),
+                call("private chunk two", ephemeral=True),
+            ],
+        )
+
+    async def test_game_report_translates_invalid_history_without_leaking_details(
+        self,
+    ) -> None:
+        interaction = make_interaction()
+        error = InvalidTurnEventError(
+            "payload secreto con traceback",
+            row_id=73,
+            event_type="evento_*_<@123>",
+        )
+
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=error,
+            ),
+            patch("machiavelli.discord.logger.error") as mock_log,
+        ):
+            await game_report.callback(interaction)
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
         interaction.followup.send.assert_awaited_once_with(
-            "report one\nreport two",
+            "No se pudo generar el informe porque el historial del turno no es "
+            "válido.\nComunícaselo al administrador para que revise los eventos "
+            "guardados.",
             ephemeral=True,
         )
+        log_args, log_kwargs = mock_log.call_args
+        self.assertNotIn("payload secreto", " ".join(map(str, log_args)))
+        self.assertEqual(
+            log_kwargs,
+            {"extra": {"row_id": 73, "event_type": "evento_*_<@123>"}},
+        )
+        message = interaction.followup.send.await_args.args[0]
+        for forbidden in (
+            "73",
+            "evento_*_<@123>",
+            "payload secreto",
+            "InvalidTurnEventError",
+            "Traceback",
+        ):
+            self.assertNotIn(forbidden, message)
 
     def test_chunk_lines_preserves_order_and_never_exceeds_limit(self) -> None:
         lines = ("a" * 1200, "b" * 1200, "c" * 2100)
@@ -344,14 +431,22 @@ class TestReports(unittest.IsolatedAsyncioTestCase):
 class TestRunGame(unittest.IsolatedAsyncioTestCase):
     """Verify successful publication and safe atomic military failures."""
 
-    async def test_run_game_success_publishes_public_report(self) -> None:
+    async def test_run_game_success_publishes_chunked_report_in_order(self) -> None:
         interaction = make_interaction()
+        report = ("line one", "line two")
+        chunks = ["public chunk one", "public chunk two"]
 
-        with patch(
-            "machiavelli.discord.asyncio.to_thread",
-            new_callable=AsyncMock,
-            return_value=("line one", "line two"),
-        ) as mock_to_thread:
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new_callable=AsyncMock,
+                return_value=report,
+            ) as mock_to_thread,
+            patch(
+                "machiavelli.discord._chunk_lines",
+                return_value=chunks,
+            ) as mock_chunk_lines,
+        ):
             await run_game.callback(interaction)
 
         interaction.response.defer.assert_awaited_once_with(ephemeral=True)
@@ -360,12 +455,96 @@ class TestRunGame(unittest.IsolatedAsyncioTestCase):
             admin_group.db_path,
             interaction.channel_id,
         )
+        mock_chunk_lines.assert_called_once_with(report)
         interaction.delete_original_response.assert_awaited_once_with()
-        interaction.followup.send.assert_awaited_once_with(
-            "line one\nline two",
-            ephemeral=False,
+        self.assertEqual(
+            interaction.followup.send.await_args_list,
+            [
+                call("public chunk one", ephemeral=False),
+                call("public chunk two", ephemeral=False),
+            ],
         )
         interaction.edit_original_response.assert_not_awaited()
+
+    async def test_run_game_worker_keeps_the_event_loop_available(self) -> None:
+        interaction = make_interaction()
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        witness_completed = asyncio.Event()
+
+        def blocking_worker(db_path: str, channel_id: int) -> tuple[str, ...]:
+            self.assertEqual((db_path, channel_id), (admin_group.db_path, 321))
+            worker_started.set()
+            release_worker.wait()
+            return ("informe",)
+
+        async def witness() -> None:
+            while not worker_started.is_set():
+                await asyncio.sleep(0)
+            self.assertFalse(run_task.done())
+            witness_completed.set()
+            release_worker.set()
+
+        with patch("machiavelli.discord._execute_game_turn", blocking_worker):
+            run_task = asyncio.create_task(run_game.callback(interaction))
+            witness_task = asyncio.create_task(witness())
+            await asyncio.wait_for(
+                asyncio.gather(run_task, witness_task),
+                timeout=5,
+            )
+
+        self.assertTrue(witness_completed.is_set())
+        interaction.delete_original_response.assert_awaited_once_with()
+        interaction.followup.send.assert_awaited_once_with(
+            "informe",
+            ephemeral=False,
+        )
+
+    async def test_run_game_translates_invalid_history_without_leaking_details(
+        self,
+    ) -> None:
+        interaction = make_interaction()
+        error = InvalidTurnEventError(
+            "json interno y traza",
+            row_id=91,
+            event_type="military_resolution",
+        )
+
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=error,
+            ),
+            patch("machiavelli.discord.logger.error") as mock_log,
+        ):
+            await run_game.callback(interaction)
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        interaction.edit_original_response.assert_awaited_once_with(
+            content=(
+                "No se pudo generar el informe porque el historial del turno no es "
+                "válido.\nComunícaselo al administrador para que revise los eventos "
+                "guardados."
+            )
+        )
+        log_args, log_kwargs = mock_log.call_args
+        self.assertNotIn("json interno", " ".join(map(str, log_args)))
+        self.assertEqual(
+            log_kwargs,
+            {"extra": {"row_id": 91, "event_type": "military_resolution"}},
+        )
+        message = interaction.edit_original_response.await_args.kwargs["content"]
+        for forbidden in (
+            "91",
+            "military_resolution",
+            "json interno",
+            "InvalidTurnEventError",
+            "Traceback",
+        ):
+            self.assertNotIn(forbidden, message)
+        interaction.delete_original_response.assert_not_awaited()
+        interaction.followup.send.assert_not_awaited()
 
     async def test_run_game_not_found_edits_deferred_response(self) -> None:
         interaction = make_interaction()

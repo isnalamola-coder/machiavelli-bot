@@ -71,6 +71,52 @@ def test_expense_results_emit_exact_typed_payloads(
     assert player.commands == ([command] if command_retained else [])
 
 
+@pytest.mark.parametrize(
+    ("actor", "rule_name"),
+    [("E A", "famine_active"), ("E E", "assassinations_active")],
+)
+def test_disabled_rule_discards_only_stale_expense_and_preserves_other_costs(
+    actor: str, rule_name: str
+) -> None:
+    game = Mock()
+    game.add_event = Mock()
+    game.scenario.rules.famine_active = True
+    game.scenario.rules.assassinations_active = True
+    setattr(game.scenario.rules, rule_name, False)
+    before = Mock(actor="E G", command="4", target="citadel")
+    disabled = Mock(actor=actor, command="9", target="pisa")
+    after = Mock(actor="E H", command="5", target="fort")
+    for command in (before, disabled, after):
+        command.is_valid_expense.return_value = True
+    player = Mock(
+        player_id="P1",
+        ducats=20,
+        commands=[before, disabled, after],
+    )
+    game.players = [player]
+
+    ExpenditureProcessor(game).run()
+
+    assert player.commands == [before, after]
+    assert player.ducats == 11
+    events = [call.args[0] for call in game.add_event.call_args_list]
+    assert [event.type for event in events] == [EventType.EXPENSE, EventType.EXPENSE]
+    assert [dict(event.data) for event in events] == [
+        {
+            "player": "P1",
+            "expense": "G",
+            "target": "citadel",
+            "amount": 4,
+        },
+        {
+            "player": "P1",
+            "expense": "H",
+            "target": "fort",
+            "amount": 5,
+        },
+    ]
+
+
 class TestExpenditureProcessor(unittest.TestCase):
     """Tests unitarios para ExpenditureProcessor."""
 
