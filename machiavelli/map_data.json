@@ -30,7 +30,7 @@
       ]
     },
     {
-      "name": "Provence",
+      "name": "Provence North",
       "custom_id": "prove N",
       "sea_routes": [
         { "destination": "avign" },
@@ -39,7 +39,7 @@
       ]
     },
     {
-      "name": "Provence",
+      "name": "Provence South",
       "custom_id": "prove S",
       "sea_routes": [
         { "destination": "marse" },
@@ -904,7 +904,7 @@
       ]
     },
     {
-      "name": "Croatia",
+      "name": "Croatia North",
       "custom_id": "croat N",
       "city": "city",
       "sea_routes": [
@@ -914,7 +914,7 @@
       ]
     },
     {
-      "name": "Croatia",
+      "name": "Croatia South",
       "custom_id": "croat S",
       "city": "city",
       "sea_routes": [{ "destination": "dalma" }, { "destination": "istri" }]
