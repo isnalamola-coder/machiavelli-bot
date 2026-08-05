@@ -25,7 +25,7 @@ class CommandReporter:
             report: list[str] = []
             target_type: str | None = None
 
-            actor_type, actor_id = command.actor.split()
+            actor_type, actor_id = command.actor.split(maxsplit=1)
 
             if actor_type in ("A", "F", "G"):
                 actor_name = GameTables.actors.get(actor_type, actor_type)

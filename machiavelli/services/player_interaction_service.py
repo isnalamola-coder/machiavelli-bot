@@ -129,7 +129,7 @@ class PlayerInteractionService:
         choices = []
 
         if self.game.turn_number % 4 == 1:
-            actor_type, actor_id = actor.split()
+            actor_type, actor_id = actor.split(maxsplit=1)
 
             if (
                 (actor_type == "A" and actor_id in self.player.armies)

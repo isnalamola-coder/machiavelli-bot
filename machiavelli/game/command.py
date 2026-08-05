@@ -46,7 +46,7 @@ class Command:
         game: Game,
         player: Player,
     ) -> list[Command]:
-        """Load commands through the repository compatibility facade."""
+        """Carga los comandos de un jugador."""
         from machiavelli.repositories.command_repository import CommandRepository
 
         if player.game is not game:
@@ -57,7 +57,7 @@ class Command:
         self,
         allowed_types: set[str] | list[str] | None = None,
     ) -> bool:
-        """Return whether the command is a well-formed supported expense."""
+        """Valida sintácticamente el comando como gasto."""
         actor = self.actor.split()
         if len(actor) != 2 or actor[0] != "E":
             return False
@@ -72,7 +72,7 @@ class Command:
         )
 
     def __str__(self) -> str:
-        """Return the historical human-readable representation of the command."""
+        """Devuelve una representación legible del comando."""
         game_map = self.game.require_map()
         provinces = game_map.provinces
         seas = game_map.seas
@@ -81,7 +81,7 @@ class Command:
         try:
             report: list[str] = []
             target_type: str | None = None
-            actor_type, actor_id = self.actor.split()
+            actor_type, actor_id = self.actor.split(maxsplit=1)
 
             if actor_type in ("A", "F", "G"):
                 report.append(

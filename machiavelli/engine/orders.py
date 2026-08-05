@@ -64,7 +64,7 @@ class OrderProcessor:
         current.command = command.command
         current.target = command.target
 
-        actor_type, actor_id = command.actor.split()
+        actor_type, actor_id = command.actor.split(maxsplit=1)
         is_new_unit = (
             (actor_type == "A" and actor_id not in player.armies)
             or (actor_type == "F" and actor_id not in player.fleets)
@@ -81,7 +81,7 @@ class OrderProcessor:
         command: Command,
     ) -> list[str]:
         """Register a campaign order, expense update, or convoy segment."""
-        actor_type, _actor_id = command.actor.split()
+        actor_type, _actor_id = command.actor.split(maxsplit=1)
         if actor_type == "E":
             return self._handle_expense_command(player, command)
 
