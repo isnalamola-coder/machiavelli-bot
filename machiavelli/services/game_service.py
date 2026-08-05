@@ -185,10 +185,7 @@ class GameService:
     ) -> list[str]:
         """Execute one turn, then persist the resulting aggregate atomically."""
         game = self.get_game(channel_id)
-        GameEngine(
-            game,
-            dislodgement_resolver=dislodgement_resolver,
-        ).run()
+        GameEngine(game).run()
         report_lines = game.turn_report()
         self.repo.save(game)
         return report_lines
