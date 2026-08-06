@@ -1,32 +1,48 @@
 # AGENTS.md
 
-- No mantengas la compatibilidad con versiones anteriores. Elimina las rutas
-  obsoletas en lugar de añadir capas de compatibilidad, soluciones alternativas o
-  conversiones de datos heredados. Los cambios obligatorios del esquema SQLite sí
-  usan las migraciones secuenciales, transaccionales y reversibles exigidas por la
-  constitución del proyecto, sin conservar formatos retirados salvo que la spec lo
-  exija expresamente.
+## 1. Aclara antes de implementar
 
-- Elige la implementación más sencilla que cumpla plenamente los requisitos
-  actuales. Evita abstracciones, configuraciones e indirecciones especulativas.
+Antes de programar, identifica y comunica las suposiciones, ambigüedades y posibles interpretaciones. Expón las alternativas relevantes y sus implicaciones. Cuando una duda pueda modificar el resultado, solicita aclaración antes de continuar. Señala también cualquier enfoque más sencillo que satisfaga los requisitos.
 
-- Haz crecer el sistema por capas. Empieza por la versión más pequeña que funcione
-  de principio a fin y añade cada nueva capacidad sobre un producto que ya funcione.
-  Nunca sacrifiques un producto operativo por una complejidad inacabada.
+## 2. Aplica la mínima complejidad necesaria
 
-- Mantén los componentes modulares y las responsabilidades claramente separadas.
+- Implementa únicamente lo exigido por la especificación mediante la solución más sencilla, directa y mantenible que cumpla íntegramente los requisitos.
+- No añadas funcionalidades, configuraciones, abstracciones ni indirecciones especulativas.
+- No diseñes para casos de uso que no se hayan solicitado.
+- No añadas gestión para escenarios que no puedan producirse.
+- Si la implementación es considerablemente más extensa o compleja de lo necesario, simplifícala.
 
-- Da preferencia a bibliotecas consolidadas y bien mantenidas cuando reduzcan la
-  complejidad global o mejoren la fiabilidad. No vuelvas a implementar
-  funcionalidades comunes sin un motivo claro.
+## 3. Limita estrictamente el alcance de los cambios
 
-- Aprovecha las dependencias que ya existen en el proyecto antes de escribir una
-  implementación propia o añadir paquetes. No des por hecho que una biblioteca
-  carece de una función sin consultar antes su documentación y sus tipos.
+- Modifica únicamente los archivos, componentes y comportamientos necesarios para cumplir la especificación.
+- Respeta el estilo y la estructura existentes.
+- **No reformatees, limpies ni refactorices código ajeno al cambio.**
+- Si detectas problemas no relacionados, documéntalos sin modificarlos.
+- Limpia únicamente los residuos introducidos por tu propia implementación.
 
-- Toma decisiones arquitectónicas pensando a largo plazo. No aceptes una solución
-  provisional que solo funcione por ahora y esté pensada para sustituirse más
-  adelante.
+## 4. Desarrolla de forma incremental y sostenible
+
+- Construye primero la versión funcional más pequeña que cubra el flujo completo. Añade capacidades posteriores sobre una base que permanezca operativa en cada etapa.
+- La solución inicial debe ser sencilla, pero no provisional ni deliberadamente desechable. Debe encajar en la arquitectura prevista y poder mantenerse sin requerir una sustitución inmediata.
+
+## 5. Reutiliza antes de implementar
+
+Sigue este orden de preferencia:
+
+1º Utiliza las funciones y dependencias que ya existan en el proyecto.
+2º Comprueba su documentación, tipos y capacidades antes de descartarlas.
+3º Cuando sea necesario añadir una dependencia, elige una biblioteca consolidada y correctamente mantenida.
+4º Implementa una solución propia únicamente cuando las alternativas anteriores no sean adecuadas y exista una justificación clara.
+
+## 6. Mantén una arquitectura modular
+
+- Conserva responsabilidades claramente separadas y componentes con límites definidos. 
+- Introduce modularidad cuando reduzca la complejidad real, facilite las pruebas o permita separar responsabilidades, pero evita abstracciones creadas únicamente para anticipar necesidades futuras.
+
+## 7. Elimina la compatibilidad obsoleta
+
+- No conserves compatibilidad con versiones, rutas o formatos retirados, salvo que la especificación lo exija expresamente.
+- Elimina las rutas obsoletas en lugar de añadir capas de compatibilidad, soluciones alternativas o conversiones de datos heredados. 
 
 ## Contexto técnico activo
 
@@ -40,19 +56,4 @@
 - Discord es un adaptador: no abre SQLite ni construye repositorios. La E/S, carga,
   ejecución, reporte y guardado síncronos permanecen juntos fuera del event loop.
 
-## Feature activa: eventos de turno y reglas de escenario
 
-- Fuente de diseño: [plan de implementación](specs/002-eventos-turno-reglas/plan.md)
-  y [contrato de eventos](specs/002-eventos-turno-reglas/contracts/turn-events.md).
-- `TurnEvent` es el único valor de evento. Valida payloads JSON al crear y cargar;
-  no introduzcas subclases por tipo, registros dinámicos ni Pydantic.
-- `Game.turn_events` contiene objetos `TurnEvent`. No añadas mensajes, Markdown ni
-  registros `tipo|json` al dominio o al motor.
-- `TurnReporter` pertenece a servicios y es el único propietario de la presentación
-  del historial para Discord.
-- La evolución v4 elimina y recrea únicamente `game_events`: persiste `event_type` y
-  `data_json`, no convierte la columna histórica `message` y no mantiene una ruta de
-  lectura antigua.
-- Las reglas `fortress_active`, `assassinations_active`, `famine_active`,
-  `first_turn_famine` y `plague_active` deben impedir estado, cobros, fases y eventos
-  residuales cuando estén desactivadas.
