@@ -1,4 +1,4 @@
-# machiavelli/engine/dislodgement.property
+# machiavelli/engine/dislodgement.py
 
 import logging
 import random
@@ -27,6 +27,7 @@ class RetreatHandler:
     ) -> str | None:
         """Devuelve la retirada preferida por la unidad."""
         unit: UnitKey = outcome.unit
+        destination = None
 
         # Independent garrisons do not reatreat
         if unit.player_id is None:
@@ -43,22 +44,27 @@ class RetreatHandler:
                 origin=unit.origin, mode=MovementMode.SEA
             )
         else:
-            adjacent_locations = None
+            adjacent_locations = set()
+
+        adjacent_locations: list[str] = [
+            location
+            for location in adjacent_locations
+            if location not in invalid_destinations
+        ]
 
         if adjacent_locations:
             # Tenemos lugares de retirada
             # Ordenamos los lugares de retirada por
             # 1. Está controlado
             # 2. Es del país natal del jugador
+            random.shuffle(adjacent_locations)
+
             hc_provinces = self.game.scenario.home_countries_provinces(
                 player.home_countries
             )
             controlled_provinces = player.controlled_locations
 
-            adjacent_locations: list[str] = list(adjacent_locations)
-            random.shuffle(adjacent_locations)
-
-            # Busco que esté en las dos
+            # Busco que esté controlada y sea del país natal
             destination = next(
                 (
                     d
@@ -68,39 +74,35 @@ class RetreatHandler:
                 ),
                 None,
             )
-            if destination:
-                invalid_destinations.add(conflict_location(destination, unit.unit_type))
-                return destination
 
-            # Busco una controlada
-            destination = next(
-                (d for d in adjacent_locations if d.split()[0] in controlled_provinces),
-                None,
-            )
-            if destination:
-                invalid_destinations.add(conflict_location(destination, unit.unit_type))
-                return destination
+            if not destination:
+                # Busco una controlada
+                destination = next(
+                    (
+                        d
+                        for d in adjacent_locations
+                        if d.split()[0] in controlled_provinces
+                    ),
+                    None,
+                )
 
-            # Busco una del país natal
-            destination = next(
-                (d for d in adjacent_locations if d.split()[0] in hc_provinces),
-                None,
-            )
-            if destination:
-                invalid_destinations.add(conflict_location(destination, unit.unit_type))
-                return destination
-            else:
+            if not destination:
+                # Busco una del país natal
+                destination = next(
+                    (d for d in adjacent_locations if d.split()[0] in hc_provinces),
+                    None,
+                )
+            if not destination:
+                # Una cualquiera adyacente
                 destination = adjacent_locations[0]
-                invalid_destinations.add(conflict_location(destination, unit.unit_type))
-                return destination
 
         elif unit.origin in self.map.provinces:
             # No tenemos, pero quizá podamos retirarnos a la ciudad
             province = self.map.provinces[unit.origin]
-            destination = conflict_location(unit.origin, unit.unit_type)
+            temptative_destination = conflict_location(unit.origin, "G")
             if (
                 # No hay una guarnición en nuestra provincia
-                destination not in invalid_destinations
+                temptative_destination not in invalid_destinations
                 and
                 # Tiene una ciudad fortificada o un fuerte
                 (
@@ -112,10 +114,15 @@ class RetreatHandler:
                 if unit.unit_type == "A" or unit.unit_type == "F" and province.has_port:
                     # Nos retiramos al fuerte
                     outcome.final_unit_type = "G"
-                    invalid_destinations.add(destination)
-                    return destination
+                    destination = conflict_location(unit.origin, unit.unit_type)
 
-        return None
+        if destination:
+            invalid_destinations.add(
+                conflict_location(destination, outcome.final_unit_type)
+            )
+            return destination
+        else:
+            return None
 
     def __call__(self, resolution: MilitaryResolution) -> Mapping[UnitKey, str | None]:
         """Resuelve las retiradas del combate."""
@@ -137,9 +144,5 @@ class RetreatHandler:
             retreats[outcome.unit] = self._preferred_retreat(
                 outcome, invalid_destinations
             )
-
-        logger.debug("Vamos a devolver %s", retreats)
-
-        raise Exception("Estamos de pruebas")
 
         return retreats
