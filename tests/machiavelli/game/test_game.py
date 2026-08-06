@@ -9,6 +9,16 @@ from tests.machiavelli.engine.helpers import (
 )
 
 
+class TestRemovedLegacyAlgorithms(unittest.TestCase):
+    """Fija la retirada de los algoritmos duplicados del agregado."""
+
+    def test_initial_setup_does_not_exist(self):
+        self.assertNotIn("initial_setup", Game.__dict__)
+
+    def test_spring_start_does_not_exist(self):
+        self.assertNotIn("spring_start", Game.__dict__)
+
+
 class TestGetUnitOwner(unittest.TestCase):
     """Tests para el método get_unit_owner de Game."""
 

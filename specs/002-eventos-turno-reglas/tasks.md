@@ -35,7 +35,8 @@ repositorios, subclases de evento, registros dinámicos ni rutas de compatibilid
 
 **Purpose**: Confirmar una base conocida sin crear infraestructura ni dependencias.
 
-- [ ] T001 Ejecutar `python -m pytest -q tests/machiavelli/test_game.py tests/machiavelli/game tests/machiavelli/engine tests/machiavelli/services tests/machiavelli/repositories tests/machiavelli/db/test_database.py tests/machiavelli/test_discord.py tests/machiavelli/test_architecture.py`, `python -m ruff check machiavelli tests` y `python -m mypy machiavelli`; registrar cualquier fallo preexistente antes de modificar `machiavelli/` o `tests/machiavelli/` y no continuar si impide distinguir una regresión de esta feature
+- [x] T001 Ejecutar `python -m pytest -q tests/machiavelli/test_game.py tests/machiavelli/game tests/machiavelli/engine tests/machiavelli/services tests/machiavelli/repositories tests/machiavelli/db/test_database.py tests/machiavelli/test_discord.py tests/machiavelli/test_architecture.py`, `python -m ruff check machiavelli tests` y `python -m mypy machiavelli`; registrar cualquier fallo preexistente antes de modificar `machiavelli/` o `tests/machiavelli/` y no continuar si impide distinguir una regresión de esta feature
+  - Evidencia y fallos conocidos aceptados: [baseline-phase-1.md](./baseline-phase-1.md).
 
 **Checkpoint**: La línea base está registrada; `pyproject.toml` conserva Python
 3.13+, pytest, Ruff y mypy, sin dependencias nuevas.
