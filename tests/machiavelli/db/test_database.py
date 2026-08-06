@@ -105,10 +105,13 @@ def test_init_db_creates_schema_from_scratch(repo: DatabaseManager) -> None:
     expected_tables = {"games", "players", "game_events", "commands"}
     assert expected_tables.issubset(tables)
 
-    # 3. Comprobar que la columna agregada en la migración 2 (besieges) existe
+    # 3. Comprobar las columnas de games y el historial tipado v4.
     cursor.execute("PRAGMA table_info(games);")
     columns = {row["name"] for row in cursor.fetchall()}
     assert "besieges" in columns
+    cursor.execute("PRAGMA table_info(game_events);")
+    event_columns = [row["name"] for row in cursor.fetchall()]
+    assert event_columns == ["id", "game_id", "event_type", "data_json"]
 
     conn.close()
 
@@ -126,24 +129,9 @@ def test_init_db_is_idempotent(repo: DatabaseManager) -> None:
 
 
 def test_init_db_incremental_migration(db_path: Path) -> None:
-    """Prueba que una BBDD en versión 1 se actualice correctamente."""
-    # Crear manualmente una BBDD antigua (versión 1)
+    """Prueba que una BBDD canónica en versión 1 se actualice correctamente."""
     conn = sqlite3.connect(db_path)
-    conn.execute(
-        """
-        CREATE TABLE games (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            channel_id INTEGER UNIQUE,
-            scenario_id TEXT,
-            turn_number INTEGER DEFAULT 0,
-            weekly_deadline TEXT,
-            next_deadline TEXT,
-            famine TEXT,
-            independent_garrisons TEXT
-        );
-        """
-    )
+    conn.executescript(_UPGRADES[0])
     conn.execute("PRAGMA user_version = 1;")
     conn.commit()
     conn.close()
@@ -152,7 +140,7 @@ def test_init_db_incremental_migration(db_path: Path) -> None:
     repo = DatabaseManager(db_path)
     repo.init_db()
 
-    # Verificar que saltó de v1 a v3
+    # Verificar que saltó de v1 a v4
     conn = repo.get_connection()
     version = conn.execute("PRAGMA user_version;").fetchone()[0]
 
@@ -221,8 +209,10 @@ def test_upgrade_connection_does_not_close_caller_connection(db_path: Path) -> N
 
 
 @pytest.mark.parametrize("source_version", [1, 2, 3])
-def test_upgrade_preserves_historical_rows(db_path: Path, source_version: int) -> None:
-    """Las migraciones conservan partidas, jugadores, eventos y órdenes existentes."""
+def test_upgrade_preserves_state_and_resets_events(
+    db_path: Path, source_version: int
+) -> None:
+    """La v4 conserva el agregado y reinicia únicamente el historial efímero."""
     conn = sqlite3.connect(db_path)
     try:
         for script in _UPGRADES[:source_version]:
@@ -284,8 +274,11 @@ def test_upgrade_preserves_historical_rows(db_path: Path, source_version: int) -
             (game_id,),
         ).fetchone() == ("Florencia", 456, 12)
         assert conn.execute(
-            "SELECT message FROM game_events WHERE game_id = ?", (game_id,)
-        ).fetchone() == ("Evento histórico",)
+            "SELECT COUNT(*) FROM game_events WHERE game_id = ?", (game_id,)
+        ).fetchone() == (0,)
+        assert [
+            row[1] for row in conn.execute("PRAGMA table_info(game_events)").fetchall()
+        ] == ["id", "game_id", "event_type", "data_json"]
         if source_version == 3:
             assert conn.execute(
                 "SELECT actor, command, target FROM commands WHERE game_id = ?",
@@ -346,3 +339,85 @@ def test_database_manager_delegates_to_upgrade_connection(
 
     assert calls == [connection]
     assert connection.closed
+
+
+class _FailingMigrationCursor(sqlite3.Cursor):
+    def execute(self, sql: str, parameters=()):  # type: ignore[no-untyped-def]
+        result = super().execute(sql, parameters)
+        normalized = " ".join(sql.split()).upper()
+        connection = self.connection
+        if not isinstance(connection, _FailingMigrationConnection):
+            return result
+        if connection.fail_after == "drop" and normalized.startswith(
+            "DROP TABLE GAME_EVENTS"
+        ):
+            raise sqlite3.OperationalError("fallo tras drop")
+        if connection.fail_after == "create" and normalized.startswith(
+            "CREATE TABLE GAME_EVENTS"
+        ):
+            raise sqlite3.OperationalError("fallo tras create")
+        if connection.fail_after == "version" and normalized.startswith(
+            "PRAGMA USER_VERSION = 4"
+        ):
+            raise sqlite3.OperationalError("fallo tras version")
+        return result
+
+
+class _FailingMigrationConnection(sqlite3.Connection):
+    fail_after: str | None = None
+
+    def cursor(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs.setdefault("factory", _FailingMigrationCursor)
+        return super().cursor(*args, **kwargs)
+
+    def commit(self) -> None:
+        if (
+            self.fail_after == "commit"
+            and self.execute("PRAGMA user_version").fetchone()[0] == 4
+        ):
+            raise sqlite3.OperationalError("fallo antes de commit")
+        super().commit()
+
+
+def _seed_v3(path: Path) -> int:
+    conn = sqlite3.connect(path)
+    try:
+        for script in _UPGRADES:
+            conn.executescript(script)
+        conn.execute("PRAGMA user_version = 3")
+        conn.execute("INSERT INTO games (name, channel_id) VALUES (?, ?)", ("v3", 9))
+        game_id = conn.execute("SELECT id FROM games").fetchone()[0]
+        conn.execute(
+            "INSERT INTO game_events (game_id, message) VALUES (?, ?)",
+            (game_id, "histórico"),
+        )
+        conn.commit()
+        return game_id
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("fail_after", ["drop", "create", "version", "commit"])
+def test_v4_migration_rolls_back_table_rows_and_version(
+    db_path: Path, fail_after: str
+) -> None:
+    game_id = _seed_v3(db_path)
+    conn = sqlite3.connect(db_path, factory=_FailingMigrationConnection)
+    conn.fail_after = fail_after
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            upgrade_connection(conn)
+    finally:
+        conn.close()
+
+    check = sqlite3.connect(db_path)
+    try:
+        assert check.execute("PRAGMA user_version").fetchone() == (3,)
+        assert [
+            row[1] for row in check.execute("PRAGMA table_info(game_events)").fetchall()
+        ] == ["id", "game_id", "message"]
+        assert check.execute(
+            "SELECT message FROM game_events WHERE game_id = ?", (game_id,)
+        ).fetchone() == ("histórico",)
+    finally:
+        check.close()

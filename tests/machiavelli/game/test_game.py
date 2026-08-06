@@ -2,11 +2,46 @@
 
 import unittest
 
+from machiavelli.events import EventType, TurnEvent
 from machiavelli.game.game import Game
 from tests.machiavelli.engine.helpers import (
     create_mock_game,
     create_mock_player,
 )
+
+
+class TestRemovedLegacyAlgorithms(unittest.TestCase):
+    """Fija la retirada de los algoritmos duplicados del agregado."""
+
+    def test_initial_setup_does_not_exist(self):
+        self.assertNotIn("initial_setup", Game.__dict__)
+
+    def test_spring_start_does_not_exist(self):
+        self.assertNotIn("spring_start", Game.__dict__)
+
+
+class TestTurnEvents(unittest.TestCase):
+    def test_add_event_keeps_object_identity_and_order(self):
+        game = Game("typed-history")
+        first = TurnEvent(EventType.START_GAME, {"scenario": "Be"})
+        second = TurnEvent(EventType.START_SEASON, {"year": 1454, "season": 0})
+
+        game.add_event(first)
+        game.add_event(second)
+        game.add_event(first)
+
+        self.assertEqual(game.turn_events, [first, second, first])
+        self.assertIs(game.turn_events[0], first)
+        self.assertIs(game.turn_events[1], second)
+        self.assertIs(game.turn_events[2], first)
+
+    def test_add_event_rejects_strings(self):
+        game = Game("typed-history")
+
+        with self.assertRaisesRegex(TypeError, "TurnEvent"):
+            game.add_event("start_game|{}")  # type: ignore[arg-type]
+
+        self.assertEqual(game.turn_events, [])
 
 
 class TestGetUnitOwner(unittest.TestCase):

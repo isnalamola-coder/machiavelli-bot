@@ -146,7 +146,7 @@ class TestControlChanges(unittest.TestCase):
             event = self.mock_game.add_event.call_args[0][0]
             self.assertIsInstance(event, TurnEvent)
             self.assertEqual(event.type, EventType.GET_CONTROL)
-            self.assertEqual(event.data, {"player": "FLORENCE", "provinces": ["pisa"]})
+            self.assertEqual(event.data, {"player": "FLORENCE", "provinces": ("pisa",)})
 
     def test_control_changes_lose_control(self):
         """Pierde el control de una provincia si hay presencia de unidades ajenas."""
@@ -168,7 +168,9 @@ class TestControlChanges(unittest.TestCase):
             self.mock_game.add_event.assert_called_once()
             event = self.mock_game.add_event.call_args[0][0]
             self.assertEqual(event.type, EventType.LOSE_CONTROL)
-            self.assertEqual(event.data, {"player": "FLORENCE", "provinces": ["flore"]})
+            self.assertEqual(
+                event.data, {"player": "FLORENCE", "provinces": ("flore",)}
+            )
 
     def test_control_changes_retain_control(self):
         """Mantiene el control de una provincia vacía si no hay unidades ajenas."""

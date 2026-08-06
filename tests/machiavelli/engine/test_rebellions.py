@@ -14,6 +14,7 @@ class TestExpenseRebellionPacify(unittest.TestCase):
 
         # Mock del propietario de la provincia
         self.owner_player = Mock()
+        self.owner_player.player_id = "FLORENCE"
         self.owner_player.rebelled_provinces = ["pisa"]
         self.owner_player.rebelled_cities = ["flore"]
 
@@ -32,7 +33,10 @@ class TestExpenseRebellionPacify(unittest.TestCase):
         event = self.mock_game.add_event.call_args[0][0]
         self.assertIsInstance(event, TurnEvent)
         self.assertEqual(event.type, EventType.REBELLION_PACIFY)
-        self.assertEqual(event.data, {"province": "pisa"})
+        self.assertEqual(
+            event.data,
+            {"player": "FLORENCE", "province": "pisa", "kind": "province"},
+        )
 
     def test_expense_rebellion_pacify_city(self):
         """Pacifica exitosamente una ciudad en rebelión."""
@@ -45,7 +49,10 @@ class TestExpenseRebellionPacify(unittest.TestCase):
 
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.REBELLION_PACIFY)
-        self.assertEqual(event.data, {"province": "flore"})
+        self.assertEqual(
+            event.data,
+            {"player": "FLORENCE", "province": "flore", "kind": "city"},
+        )
 
     def test_expense_rebellion_pacify_non_rebelled(self):
         """Si el objetivo no tiene ninguna rebelión activa, no hace nada."""
@@ -65,6 +72,7 @@ class TestDoRebellion(unittest.TestCase):
 
         # Mock del jugador
         self.owner = Mock()
+        self.owner.player_id = "FLORENCE"
         self.owner.rebelled_provinces = []
         self.owner.rebelled_cities = []
         self.owner.garrisons = []
@@ -107,7 +115,7 @@ class TestDoRebellion(unittest.TestCase):
         event = self.mock_game.add_event.call_args[0][0]
         self.assertIsInstance(event, TurnEvent)
         self.assertEqual(event.type, EventType.REBELLION_CITY)
-        self.assertEqual(event.data, {"province": "pisa"})
+        self.assertEqual(event.data, {"player": "FLORENCE", "province": "pisa"})
 
     def test_do_rebellion_fortified_with_garrison(self):
         """Si hay guarnición defendiendo, la rebelión va a la provincia."""
@@ -122,7 +130,7 @@ class TestDoRebellion(unittest.TestCase):
         self.mock_game.add_event.assert_called_once()
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.REBELLION_PROVINCE)
-        self.assertEqual(event.data, {"province": "pisa"})
+        self.assertEqual(event.data, {"player": "FLORENCE", "province": "pisa"})
 
     def test_do_rebellion_unfortified(self):
         """Si la provincia no tiene fortificación, emite REBELLION_PROVINCE."""
@@ -134,7 +142,7 @@ class TestDoRebellion(unittest.TestCase):
         self.mock_game.add_event.assert_called_once()
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.REBELLION_PROVINCE)
-        self.assertEqual(event.data, {"province": "pisa"})
+        self.assertEqual(event.data, {"player": "FLORENCE", "province": "pisa"})
 
     def test_do_rebellion_fortress_active(self):
         """Si la ciudad es de tipo 'fortress' y fortress_active=True."""
@@ -149,7 +157,7 @@ class TestDoRebellion(unittest.TestCase):
         self.mock_game.add_event.assert_called_once()
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.REBELLION_CITY)
-        self.assertEqual(event.data, {"province": "pisa"})
+        self.assertEqual(event.data, {"player": "FLORENCE", "province": "pisa"})
 
     def test_do_rebellion_fortress_inactive(self):
         """Si la ciudad es 'fortress' pero fortress_active=False."""
@@ -164,7 +172,7 @@ class TestDoRebellion(unittest.TestCase):
         self.mock_game.add_event.assert_called_once()
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.REBELLION_PROVINCE)
-        self.assertEqual(event.data, {"province": "pisa"})
+        self.assertEqual(event.data, {"player": "FLORENCE", "province": "pisa"})
 
 
 class TestExpenseRebellionNonHomeCountry(unittest.TestCase):

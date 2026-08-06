@@ -1,4 +1,4 @@
-# machiavelli/engine/maintance.py
+"""Maintenance phase with one auditable result per attempted order."""
 
 from ..events import EventType, TurnEvent
 from ..game.command import Command
@@ -7,14 +7,14 @@ from ..game.player import Player
 
 
 class MaintenanceResolver:
-    """Responsable de gestionar la fase de mantenimiento."""
+    """Resolve disband, maintenance, and recruitment orders."""
 
     def __init__(self, game: Game):
         self.game = game
 
     @staticmethod
     def _set_default_commands(player: Player) -> None:
-        """Orde de mantener por defecto para las unidades existentes."""
+        """Add an effective maintain order for every unit without an explicit order."""
         actors = {command.actor for command in player.commands}
         for unit_type, locations in (
             ("A", player.armies),
@@ -28,129 +28,126 @@ class MaintenanceResolver:
                         Command(player.game, player, actor, "M", target=None)
                     )
 
-    def run(self):
-        """Ejecuta la fase de mantenimiento."""
-        turn_events = []
+    def _emit(
+        self,
+        player: Player,
+        command: Command,
+        result: str,
+        cost: int,
+    ) -> None:
+        self.game.add_event(
+            TurnEvent(
+                EventType.MAINTENANCE_ORDER_RESOLVED,
+                {
+                    "player": player.player_id,
+                    "actor": command.actor,
+                    "order": command.command,
+                    "target": command.target,
+                    "result": result,
+                    "cost": cost,
+                },
+            )
+        )
+
+    @staticmethod
+    def _unit_collection(player: Player, unit_type: str) -> list[str]:
+        try:
+            return {
+                "A": player.armies,
+                "F": player.fleets,
+                "G": player.garrisons,
+            }[unit_type]
+        except KeyError as error:
+            raise ValueError(f"Tipo de unidad desconocido: {unit_type}") from error
+
+    def run(self) -> None:
+        """Resolve all maintenance attempts and emit one summary per player."""
+        game_map = self.game.require_map()
+        scenario = self.game.require_scenario()
 
         for player in self.game.players:
+            initial_ducats = player.ducats
             expenses = 0
             self._set_default_commands(player)
 
-            disbanded_units = []
-            maintained_units = []
-            recruited_units = []
-            failed_to_maintain = []
-            failed_to_recruit = []
-
-            # 1. Desmantelamientos (D)
             for command in [item for item in player.commands if item.command == "D"]:
                 unit_type, unit_id = command.actor.split()
-                units = {
-                    "A": player.armies,
-                    "F": player.fleets,
-                    "G": player.garrisons,
-                }[unit_type]
+                units = self._unit_collection(player, unit_type)
                 if unit_id in units:
                     units.remove(unit_id)
-                    disbanded_units.append(command.actor)
+                    self._emit(player, command, "disbanded", 0)
+                else:
+                    self._emit(player, command, "unit_not_found", 0)
 
-            # 2. Mantenimiento (M)
             for command in [item for item in player.commands if item.command == "M"]:
                 unit_type, unit_id = command.actor.split()
-                units = {
-                    "A": player.armies,
-                    "F": player.fleets,
-                    "G": player.garrisons,
-                }[unit_type]
+                units = self._unit_collection(player, unit_type)
                 if unit_id not in units:
-                    continue
+                    self._emit(player, command, "unit_not_found", 0)
                 elif player.ducats - expenses >= 3:
-                    maintained_units.append(command.actor)
                     expenses += 3
+                    self._emit(player, command, "maintained", 3)
                 else:
-                    failed_to_maintain.append(command.actor)
                     units.remove(unit_id)
+                    self._emit(player, command, "disbanded_no_funds", 0)
 
-            # 3. Reclutamiento (R)
-            home_countries_cities = [
+            home_country_cities = {
                 province
                 for province in player.controlled_locations
-                if self.game.scenario.province_home_country(province)
-                in player.home_countries
-                and self.game.map.provinces[province].city in ("city", "fortified")
-            ]
-
-            recruit_commands = [item for item in player.commands if item.command == "R"]
-            for command in recruit_commands:
+                if scenario.province_home_country(province) in player.home_countries
+                and game_map.provinces[province].city in ("city", "fortified")
+            }
+            for command in [item for item in player.commands if item.command == "R"]:
+                unit_type, unit_id = command.actor.split()
                 if player.ducats - expenses < 3:
-                    failed_to_recruit.append((command.actor, "no_enough_funds"))
+                    self._emit(player, command, "recruitment_no_funds", 0)
+                    continue
+                if unit_id not in home_country_cities:
+                    self._emit(player, command, "invalid_home_or_control", 0)
                     continue
 
-                unit_type, unit_id = command.actor.split()
-                province = self.game.map.provinces[unit_id]
+                province = game_map.provinces[unit_id]
+                occupied = unit_id in player.armies or any(
+                    fleet.split()[0] == unit_id for fleet in player.fleets
+                )
+                if province.is_venice:
+                    occupied = occupied or unit_id in player.garrisons
 
                 if unit_type in ("A", "F"):
-                    if unit_id not in home_countries_cities:
-                        failed_to_recruit.append((command.actor, "invalid_province"))
-                    elif unit_id in player.armies or unit_id in player.fleets:
-                        failed_to_recruit.append((command.actor, "full_location"))
-                    elif province.is_venice and unit_id in player.garrisons:
-                        failed_to_recruit.append((command.actor, "full_venice"))
+                    if occupied:
+                        self._emit(player, command, "space_occupied", 0)
                     elif unit_type == "F" and not province.has_port:
-                        failed_to_recruit.append((command.actor, "missing_port"))
+                        self._emit(player, command, "port_required", 0)
                     else:
-                        recruited_units.append(command.actor)
+                        self._unit_collection(player, unit_type).append(unit_id)
                         expenses += 3
-                        if unit_type == "A":
-                            player.armies.append(unit_id)
-                        else:
-                            player.fleets.append(unit_id)
+                        self._emit(player, command, "recruited", 3)
                 elif unit_type == "G":
                     if unit_id in player.rebelled_cities:
-                        failed_to_recruit.append((command.actor, "rebelled_city"))
-                    elif unit_id not in home_countries_cities:
-                        failed_to_recruit.append((command.actor, "invalid_province"))
-                    elif unit_id in player.garrisons:
-                        failed_to_recruit.append((command.actor, "full_location"))
-                    elif province.is_venice and (
-                        unit_id in player.armies or unit_id in player.fleets
+                        self._emit(player, command, "rebelled_city", 0)
+                    elif unit_id in player.garrisons or (
+                        province.is_venice and occupied
                     ):
-                        failed_to_recruit.append((command.actor, "full_venice"))
+                        self._emit(player, command, "space_occupied", 0)
                     elif province.city != "fortified":
-                        failed_to_recruit.append((command.actor, "invalid_city"))
+                        self._emit(player, command, "fortified_city_required", 0)
                     else:
-                        recruited_units.append(command.actor)
-                        expenses += 3
                         player.garrisons.append(unit_id)
+                        expenses += 3
+                        self._emit(player, command, "recruited", 3)
+                else:
+                    self._emit(player, command, "invalid_home_or_control", 0)
 
-            expected_expenses = (
-                len(player.armies) + len(player.fleets) + len(player.garrisons)
-            ) * 3
-            if expenses != expected_expenses:
-                raise AssertionError(
-                    f"Gasto de mantenimiento inconsistente: {expenses} != "
-                    f"{expected_expenses}"
-                )
-
+            remaining_ducats = initial_ducats - expenses
+            player.ducats = remaining_ducats
             self.game.add_event(
                 TurnEvent(
-                    type=EventType.PLAYER_MAINTENANCE,
-                    data={
+                    EventType.MAINTENANCE_SUMMARY,
+                    {
                         "player": player.player_id,
-                        "disbanded": disbanded_units,
-                        "maintained": maintained_units,
-                        "recruited": recruited_units,
-                        "failed_to_maintain": failed_to_maintain,
-                        "failed_to_recruit": failed_to_recruit,
+                        "initial_ducats": initial_ducats,
                         "expenses": expenses,
+                        "remaining_ducats": remaining_ducats,
                     },
                 )
             )
-            turn_events.append(
-                f"*Ducados iniciales*: {player.ducats}. "
-                f"*Gastos:* {expenses}. "
-                f"*Ducados restantes*: {player.ducats - expenses}. "
-            )
-            player.ducats -= expenses
-
-        return turn_events

@@ -1,6 +1,5 @@
 """Pruebas de persistencia y reglas de Game relacionadas con la fase militar."""
 
-import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -70,10 +69,10 @@ def test_military_event_round_trip_preserves_six_lists(tmp_path):
         game.save(conn)
         loaded = Game.load_game(conn, game_id=game.database_id)
 
-    record = loaded.turn_events[-1]
-    prefix, payload = record.split("|", 1)
-    assert prefix == "military_resolution"
-    assert json.loads(payload) == event.data
+    loaded_event = loaded.turn_events[-1]
+    assert loaded_event == event
+    assert loaded_event.type is EventType.MILITARY_RESOLUTION
+    assert loaded_event.to_json() == event.to_json()
 
 
 def test_military_event_is_canonical_compact_and_keeps_previous_records():
@@ -92,10 +91,13 @@ def test_military_event_is_canonical_compact_and_keeps_previous_records():
             [["M", "F", "alfa"], "beta", "lifted"],
         ],
     )
-    assert event.data["outcomes"][0][0] == ["M", "F", "alfa"]
-    assert event.data["cancelled_orders"] == [["M", "F", "alfa"], ["V", "A", "zeta"]]
-    assert event.to_record() == (
-        'military_resolution|{"broken_convoys":[["V","A","zeta"]],'
+    assert event.data["outcomes"][0][0] == ("M", "F", "alfa")
+    assert event.data["cancelled_orders"] == (
+        ("M", "F", "alfa"),
+        ("V", "A", "zeta"),
+    )
+    assert event.to_json() == (
+        '{"broken_convoys":[["V","A","zeta"]],'
         '"cancelled_orders":[["M","F","alfa"],["V","A","zeta"]],'
         '"dislodgements":[["M","F","alfa"]],'
         '"outcomes":[[["M","F","alfa"],"F","beta",false],'
@@ -105,8 +107,9 @@ def test_military_event_is_canonical_compact_and_keeps_previous_records():
         '"sieges":[[["M","F","alfa"],"beta","lifted"],'
         '[["V","A","zeta"],"ñ","started"]]}'
     )
-    assert TurnEvent.expense(EventType.EXPENSE, "M", "A", "a", 1).to_record() == str(
-        EventType.EXPENSE
+    assert (
+        TurnEvent.expense(EventType.EXPENSE, "M", "A", "a", 1).to_json()
+        == '{"amount":1,"expense":"A","player":"M","target":"a"}'
     )
 
 
@@ -128,11 +131,8 @@ def test_military_event_rejects_non_primitive_or_malformed_lists():
     for values in malformed_lists:
         with pytest.raises(ValueError):
             TurnEvent.military_resolution(*values)
-    for index in range(6):
-        values = [[] for _ in range(6)]
-        values[index] = ()
-        with pytest.raises(ValueError):
-            TurnEvent.military_resolution(*values)
+    tuple_event = TurnEvent.military_resolution((), (), (), (), (), ())
+    assert all(value == () for value in tuple_event.data.values())
 
 
 # Tests on database functions
@@ -178,7 +178,7 @@ def test_command_order_survives_repeated_loads_and_save_round_trip():
         ),
     }
 
-    assert canonical_database._SCHEMA_VERSION == 3
+    assert canonical_database._SCHEMA_VERSION == 4
     assert len(canonical_database._UPGRADES) == 3
 
     with TemporaryDirectory() as directory:
@@ -217,7 +217,7 @@ def test_command_order_survives_repeated_loads_and_save_round_trip():
             conn.commit()
             after_second_save = Game.load_game(conn, game_id=game.database_id)
             assert command_rows(after_second_save) == expected
-            assert conn.execute("PRAGMA user_version").fetchone() == (3,)
+            assert conn.execute("PRAGMA user_version").fetchone() == (4,)
 
 
 # database on Player
@@ -338,7 +338,12 @@ def test_load_game_success():
                     (7,),
                 ),
                 call(
-                    "SELECT message FROM game_events WHERE game_id = ? ORDER BY id ASC",
+                    """
+            SELECT id, event_type, data_json
+            FROM game_events
+            WHERE game_id = ?
+            ORDER BY id ASC
+            """,
                     (7,),
                 ),
             ]
