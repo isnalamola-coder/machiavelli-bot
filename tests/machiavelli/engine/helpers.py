@@ -6,6 +6,7 @@ from random import Random
 from unittest.mock import Mock
 
 from machiavelli.engine.core import GameEngine
+from machiavelli.events import TurnEvent
 from machiavelli.game.command import Command
 from machiavelli.game.game import Game
 from machiavelli.game.map import Map
@@ -106,7 +107,7 @@ def create_military_game(
     | None = None,
     independent_garrisons: Iterable[str] = (),
     besieges: Iterable[str] = (),
-    turn_events: Iterable[str] = (),
+    turn_events: Iterable[TurnEvent] = (),
     name: str = "military-test",
     channel_id: int | None = None,
     scenario: Scenario | None = None,

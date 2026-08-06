@@ -40,7 +40,7 @@ class Game:
     famine: list[str] = field(default_factory=list)
     independent_garrisons: list[str] = field(default_factory=list)
     besieges: list[str] = field(default_factory=list)
-    turn_events: list[str] = field(default_factory=list)
+    turn_events: list[TurnEvent] = field(default_factory=list)
 
     def require_map(self) -> Map:
         """Return the loaded map or fail fast for an invalid game state."""
@@ -154,12 +154,17 @@ class Game:
 
         cursor.execute("DELETE FROM game_events WHERE game_id = ?", (self.database_id,))
         if self.turn_events:
+            if not all(isinstance(event, TurnEvent) for event in self.turn_events):
+                raise TypeError("El historial solo admite TurnEvent")
             cursor.executemany(
                 """
-                INSERT INTO game_events (game_id, message)
-                VALUES (?, ?)
+                INSERT INTO game_events (game_id, event_type, data_json)
+                VALUES (?, ?, ?)
                 """,
-                [(self.database_id, message) for message in self.turn_events],
+                [
+                    (self.database_id, event.type.value, event.to_json())
+                    for event in self.turn_events
+                ],
             )
 
     def report_status(self) -> list[str]:
@@ -279,10 +284,22 @@ class Game:
 
         game.players = PlayerRepository(conn).get_by_game(game)
         cursor.execute(
-            "SELECT message FROM game_events WHERE game_id = ? ORDER BY id ASC",
+            """
+            SELECT id, event_type, data_json
+            FROM game_events
+            WHERE game_id = ?
+            ORDER BY id ASC
+            """,
             (game.database_id,),
         )
-        game.turn_events = [row[0] for row in cursor.fetchall()]
+        game.turn_events = [
+            TurnEvent.from_persisted(
+                row_id=row[0],
+                event_type=row[1],
+                data_json=row[2],
+            )
+            for row in cursor.fetchall()
+        ]
 
         if game.scenario_id:
             scenarios = Scenario.load_scenarios()
@@ -346,8 +363,10 @@ class Game:
         return report
 
     def add_event(self, turn_event: TurnEvent) -> None:
-        """Append the persistable representation of a turn event."""
-        self.turn_events.append(turn_event.to_record())
+        """Append one validated event without serializing or rendering it."""
+        if not isinstance(turn_event, TurnEvent):
+            raise TypeError("El historial solo admite TurnEvent")
+        self.turn_events.append(turn_event)
 
     def get_unit_owner(self, unit_id: str) -> Player | None:
         """Return the owner of a unit, or None for an independent garrison."""

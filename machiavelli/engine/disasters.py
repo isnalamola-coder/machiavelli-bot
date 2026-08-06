@@ -36,6 +36,12 @@ class DisastersManager:
         for exp in famine_relief_expenses:
             if exp.target in self.game.famine:
                 self.game.famine.remove(exp.target)
+                self.game.add_event(
+                    TurnEvent(
+                        EventType.FAMINE_RELIEF,
+                        {"player": exp.player.player_id, "province": exp.target},
+                    )
+                )
 
     def _apply_disaster_deaths(
         self, event_type: EventType, provinces: list[str]
@@ -107,8 +113,8 @@ class DisastersManager:
         if event_type not in (EventType.FAMINE_SPAWN, EventType.PLAGUE_SPAWN):
             return []
 
-        severity_dice = self.rng.randint(0, 5)
-        severity = GameTables.disasters[severity_dice]
+        severity_roll = self.rng.randint(1, 6)
+        severity = GameTables.disasters[severity_roll - 1]
         provinces_table = (
             GameTables.famine
             if event_type == EventType.FAMINE_SPAWN
@@ -145,7 +151,10 @@ class DisastersManager:
             self.game.add_event(
                 TurnEvent(
                     type=event_type,
-                    data={"severity": severity_dice, "provinces": affected_provinces},
+                    data={
+                        "severity_roll": severity_roll,
+                        "provinces": affected_provinces,
+                    },
                 )
             )
 

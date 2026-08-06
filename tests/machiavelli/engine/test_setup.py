@@ -11,6 +11,7 @@ from machiavelli.engine.exceptions import (
     ScenarioNotSelectedError,
 )
 from machiavelli.engine.setup import SetupManager
+from machiavelli.events import EventType, TurnEvent
 
 from .helpers import create_mock_game, create_mock_player
 
@@ -106,7 +107,49 @@ def test_setup_successful_run():
     manager = SetupManager(game, rng=Random(42))
     manager.run()
 
-    assert game.add_event.call_count == 3
+    events = [item.args[0] for item in game.add_event.call_args_list]
+    assigned_powers = [
+        p1.assign_power_from_scenario.call_args.args[0],
+        p2.assign_power_from_scenario.call_args.args[0],
+    ]
+    assert all(isinstance(event, TurnEvent) for event in events)
+    assert [event.type for event in events] == [
+        EventType.START_GAME,
+        EventType.START_GAME_POWER_ASSIGNED,
+        EventType.START_GAME_POWER_ASSIGNED,
+    ]
+    assert events[0].data == {"scenario": "scenario_1"}
+    assert [event.data for event in events[1:]] == [
+        {"player_id": "p1", "discord_id": 100, "power_id": assigned_powers[0]},
+        {"player_id": "p2", "discord_id": 200, "power_id": assigned_powers[1]},
+    ]
     assert game.independent_garrisons == ["flore"]
     p1.assign_power_from_scenario.assert_called_once()
     p2.assign_power_from_scenario.assert_called_once()
+
+
+def test_setup_assignment_events_are_reproducible_with_injected_random():
+    def assigned_power_ids(seed: int) -> tuple[str, ...]:
+        players = [
+            create_mock_player("p1", discord_id=100),
+            create_mock_player("p2", discord_id=200),
+            create_mock_player("p3", discord_id=None),
+        ]
+        powers = {
+            power_id: Mock(controlled_provinces=[]) for power_id in ("M", "V", "L")
+        }
+        game = create_mock_game(
+            turn_number=0,
+            players=players,
+            scenario=Mock(powers=powers),
+            scenario_id="scenario_1",
+        )
+        game.map = Mock(provinces={})
+
+        SetupManager(game, rng=Random(seed)).run()
+
+        events = [item.args[0] for item in game.add_event.call_args_list]
+        assert events[0].type is EventType.START_GAME
+        return tuple(event.data["power_id"] for event in events[1:])
+
+    assert assigned_power_ids(713) == assigned_power_ids(713)

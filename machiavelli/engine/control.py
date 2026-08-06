@@ -68,12 +68,12 @@ class ControlManager:
         own_provinces = self._provinces_with_own_units(player)
         others_provinces = self._provinces_with_others_units(player)
 
-        new_controlled_provinces = [
+        new_controlled_provinces = sorted(
             p
             for p in own_provinces
             if p not in others_provinces
             if p not in player.controlled_locations
-        ]
+        )
         lost_controlled_provinces = [
             p for p in player.controlled_locations if p in others_provinces
         ]

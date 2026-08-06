@@ -16,6 +16,7 @@ class TestExpenditureProcessor(unittest.TestCase):
 
         # Estado inicial del jugador de prueba
         self.player = Mock()
+        self.player.player_id = "Milan"
         self.player.ducats = 50
         self.player.commands = []
         self.mock_game.players = [self.player]
@@ -42,7 +43,7 @@ class TestExpenditureProcessor(unittest.TestCase):
 
     def test_process_player_expenses_no_numeric_amount(self):
         """Si el importe no es un entero, la descarta y emite EXPENSE_SYNTAX_ERROR."""
-        cmd = self._make_cmd(is_expense=True, command_val="diez")
+        cmd = self._make_cmd(is_expense=True, command_val="diez", target=None)
         self.player.commands = [cmd]
 
         self.processor.run()
@@ -53,7 +54,15 @@ class TestExpenditureProcessor(unittest.TestCase):
 
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.EXPENSE_SYNTAX_ERROR)
-        self.assertEqual(event.data["amount"], "diez")
+        self.assertEqual(
+            event.data,
+            {
+                "player": "Milan",
+                "expense": "G",
+                "target": None,
+                "amount": "diez",
+            },
+        )
 
     def test_process_player_expenses_zero_or_negative_amount(self):
         """Si el importe es <= 0, descarta las órdenes y emite EXPENSE_SYNTAX_ERROR."""
@@ -80,8 +89,15 @@ class TestExpenditureProcessor(unittest.TestCase):
 
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.EXPENSE)
-        self.assertEqual(event.data["amount"], 20)
-        self.assertEqual(event.data["expense"], "G")
+        self.assertEqual(
+            event.data,
+            {
+                "player": "Milan",
+                "expense": "G",
+                "target": "pisa",
+                "amount": 20,
+            },
+        )
 
     def test_process_player_expenses_no_funds(self):
         """Sin saldo suficiente, la descarta, no descuenta y emite EXPENSE_NO_FUNDS."""
@@ -96,7 +112,15 @@ class TestExpenditureProcessor(unittest.TestCase):
 
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.EXPENSE_NO_FUNDS)
-        self.assertEqual(event.data["amount"], 100)
+        self.assertEqual(
+            event.data,
+            {
+                "player": "Milan",
+                "expense": "G",
+                "target": "pisa",
+                "amount": 100,
+            },
+        )
 
     def test_run_sequential(self):
         """Procesa órdenes en orden FIFO recalculando el saldo tras cada cobro."""

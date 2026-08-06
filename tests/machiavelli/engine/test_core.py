@@ -1,10 +1,39 @@
 """Pruebas de coordinación y barreras de error del motor de turnos."""
 
 import unittest
+from random import Random
 from unittest.mock import Mock, call, patch
+
+import pytest
 
 from machiavelli.engine.core import GameEngine
 from machiavelli.engine.military import MilitaryResolutionError
+from machiavelli.events import EventType, TurnEvent
+from machiavelli.game.game import Game
+from machiavelli.game.map import Map
+from machiavelli.game.scenario import Scenario
+
+
+class TrackingGame:
+    """Minimal game double that counts history-list replacements."""
+
+    def __init__(self, turn_number: int, events: list[TurnEvent]):
+        self.turn_number = turn_number
+        self._turn_events = events
+        self.history_replacements = 0
+        self.advance_calls = 0
+
+    @property
+    def turn_events(self) -> list[TurnEvent]:
+        return self._turn_events
+
+    @turn_events.setter
+    def turn_events(self, events: list[TurnEvent]) -> None:
+        self.history_replacements += 1
+        self._turn_events = events
+
+    def advance_turn(self) -> None:
+        self.advance_calls += 1
 
 
 class TestGameEngineRunStartup(unittest.TestCase):
@@ -40,37 +69,27 @@ class TestGameEngineRunStartup(unittest.TestCase):
     def test_run_startup_exception(
         self, mock_income_manager_cls, mock_disaster_manager_cls, mock_setup_manager_cls
     ):
-        """Captura las excepciones y las reencadena como TurnExecutionFailed."""
-        from machiavelli.engine.exceptions import (
-            DuplicatePlayerError,
-            TurnExecutionFailed,
-        )
+        """Propaga el error específico y detiene las fases posteriores."""
+        from machiavelli.engine.exceptions import DuplicatePlayerError
 
         self.mock_game.turn_number = 0
-
-        # Simulamos que el SetupManager lanza un error de setup conocido
         error_raised = DuplicatePlayerError(player_id="p1", discord_id=None)
         mock_setup_manager_cls.return_value.run.side_effect = error_raised
 
-        mock_disaster_manager_cls = mock_disaster_manager_cls.return_value
-        mock_setup_manager_instance = mock_setup_manager_cls.return_value
+        with self.assertRaises(DuplicatePlayerError) as caught:
+            self.engine.run()
 
-        with self.assertRaises(TurnExecutionFailed) as ctx:
-            self.engine.run_startup()
-
-        # Comprobamos que el encadenamiento de excepciones (__cause__) se conserva
-        self.assertIs(ctx.exception.__cause__, error_raised)
-
-        # El manager de desastres posterior no debe haberse ejecutado
-        mock_disaster_manager_cls.run.assert_not_called()
-
-        # El setup manager SÍ fue llamado una vez antes de lanzar la excepción
-        mock_setup_manager_instance.run.assert_called_once()
+        self.assertIs(caught.exception, error_raised)
+        mock_setup_manager_cls.return_value.run.assert_called_once()
+        mock_disaster_manager_cls.return_value.spawn_famine.assert_not_called()
+        mock_income_manager_cls.return_value.run.assert_not_called()
+        self.mock_game.advance_turn.assert_not_called()
 
 
 class TestGameEngineRunCampaign(unittest.TestCase):
     def setUp(self):
         self.mock_game = Mock()
+        self.mock_game.players = []
         self.engine = GameEngine(game=self.mock_game)
 
     @patch("machiavelli.engine.core.ControlManager")
@@ -336,6 +355,64 @@ class TestGameEngineRun(unittest.TestCase):
                     mock_startup.assert_not_called()
                     mock_maintenance.assert_not_called()
 
+    def test_run_replaces_history_once_before_each_turn_kind(self):
+        """Startup, maintenance and campaign share one history reset at entry."""
+        previous = TurnEvent(EventType.START_GAME, {"scenario": "previous"})
+        current = TurnEvent(EventType.START_SEASON, {"year": 1454, "season": 1})
+        cases = (
+            (0, "run_startup"),
+            (1, "run_maintenance"),
+            (2, "run_campaign"),
+        )
+
+        for turn_number, phase_name in cases:
+            with self.subTest(phase=phase_name):
+                game = TrackingGame(turn_number, [previous])
+                engine = GameEngine(game)  # type: ignore[arg-type]
+
+                def emit_current(active_game: TrackingGame = game) -> None:
+                    self.assertEqual(active_game.history_replacements, 1)
+                    self.assertEqual(active_game.turn_events, [])
+                    active_game.turn_events.append(current)
+
+                with (
+                    patch.object(engine, "run_startup") as startup,
+                    patch.object(engine, "run_maintenance") as maintenance,
+                    patch.object(engine, "run_campaign") as campaign,
+                ):
+                    selected = {
+                        "run_startup": startup,
+                        "run_maintenance": maintenance,
+                        "run_campaign": campaign,
+                    }[phase_name]
+                    selected.side_effect = emit_current
+                    engine.run()
+
+                self.assertEqual(game.history_replacements, 1)
+                self.assertEqual(game.turn_events, [current])
+                self.assertEqual(game.advance_calls, 1)
+
+    def test_run_resets_before_failure_and_does_not_advance(self):
+        """A failing phase sees the fresh history but cannot advance the lifecycle."""
+        previous = TurnEvent(EventType.START_GAME, {"scenario": "previous"})
+        game = TrackingGame(2, [previous])
+        engine = GameEngine(game)  # type: ignore[arg-type]
+
+        def fail_campaign() -> None:
+            self.assertEqual(game.history_replacements, 1)
+            self.assertEqual(game.turn_events, [])
+            raise RuntimeError("phase failed")
+
+        with (
+            patch.object(engine, "run_campaign", side_effect=fail_campaign),
+            self.assertRaisesRegex(RuntimeError, "phase failed"),
+        ):
+            engine.run()
+
+        self.assertEqual(game.history_replacements, 1)
+        self.assertEqual(game.turn_events, [])
+        self.assertEqual(game.advance_calls, 0)
+
     def test_run_advances_lifecycle_only_after_success(self):
         """No avanza ni limpia órdenes cuando la fase activa falla."""
         self.mock_game.turn_number = 2
@@ -360,6 +437,73 @@ class TestGameEngineRun(unittest.TestCase):
     #     """La integración no duplica todavía el algoritmo de mantenimiento."""
     #     self.engine.run_maintenance()
     #     self.mock_game.spring_maintenance.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    ("runs", "ordered_anchors", "repeated_type"),
+    [
+        (
+            1,
+            (
+                EventType.START_GAME,
+                EventType.START_GAME_POWER_ASSIGNED,
+                EventType.INCOME_COLLECTED,
+            ),
+            EventType.START_GAME_POWER_ASSIGNED,
+        ),
+        (
+            2,
+            (
+                EventType.MAINTENANCE_ORDER_RESOLVED,
+                EventType.MAINTENANCE_SUMMARY,
+            ),
+            EventType.MAINTENANCE_ORDER_RESOLVED,
+        ),
+        (
+            3,
+            (
+                EventType.MILITARY_RESOLUTION,
+                EventType.START_SEASON,
+            ),
+            None,
+        ),
+    ],
+)
+def test_real_turns_emit_only_ordered_reconstructible_events(
+    runs: int,
+    ordered_anchors: tuple[EventType, ...],
+    repeated_type: EventType | None,
+) -> None:
+    """Real startup, maintenance and campaign keep only typed domain facts."""
+    scenario = Scenario.load_scenarios()["Be"]
+    game = Game(
+        name=f"integrated-events-{runs}",
+        scenario_id="Be",
+        scenario=scenario,
+        map=Map.load_map(),
+    )
+    for index in range(len(scenario.powers)):
+        game.add_player(f"P{index}", discord_id=1000 + index)
+
+    engine = GameEngine(game, Random(7))
+    for _ in range(runs):
+        engine.run()
+
+    events = game.turn_events
+    event_types = tuple(event.type for event in events)
+    assert event_types[0] is ordered_anchors[0]
+    anchor_positions = [event_types.index(anchor) for anchor in ordered_anchors]
+    assert anchor_positions == sorted(anchor_positions)
+    if repeated_type is not None:
+        assert event_types.count(repeated_type) > 1
+    assert all(isinstance(event, TurnEvent) for event in events)
+    assert all(isinstance(event.type, EventType) for event in events)
+    assert [TurnEvent(type=event.type, data=event.data) for event in events] == events
+    assert all(
+        marker not in event.to_json()
+        for event in events
+        for marker in ("**", "<@", "###", "```", "\n")
+    )
 
 
 class TestGameEngineDislodgementBarrier(unittest.TestCase):

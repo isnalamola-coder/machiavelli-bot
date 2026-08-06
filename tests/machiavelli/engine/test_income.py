@@ -1,6 +1,5 @@
-# test/machiavelli/engine/test_income.py
+"""Tests for auditable spring income."""
 
-import unittest
 from unittest.mock import Mock, patch
 
 from machiavelli.engine.income import IncomeManager
@@ -8,208 +7,131 @@ from machiavelli.events import EventType, TurnEvent
 from tests.machiavelli.engine.helpers import create_mock_game, create_mock_player
 
 
-class TestPlayerIncome(unittest.TestCase):
-    def setUp(self):
-        self.mock_game = create_mock_game()
-        self.mock_player = create_mock_player("player_1")
-
-        self.mock_scenario = Mock(
-            variable_income_home_countries=["L", "N"],
-            variable_income_provinces=["rome"],
-        )
-        self.mock_game.scenario = self.mock_scenario
-
-        major_city = Mock(city="fortified", major_city=2)
-        fortified_city = Mock(city="fortified", major_city=1)
-        normal_city = Mock(city="city", major_city=1)
-        only_province = Mock(city=None, major_city=None)
-        self.mock_map = Mock(
-            provinces={
-                "venic": major_city,
-                "rome": major_city,
-                "flore": fortified_city,
-                "piomb": normal_city,
-                "sienn": only_province,
-                "paler": only_province,
-            }
-        )
-        self.mock_game.map = self.mock_map
-
-        self.mock_rng = Mock()
-
-    def test_player_income_provinces_and_seas(self):
-        """Calcula los ingresos de provincias y mares."""
-        # El jugador no controla ninguna ciudad, solo mares y provincias
-        self.mock_player.ducats = 0
-
-        self.mock_player.controlled_locations = ["sienn", "paler"]
-        self.mock_player.armies = ["rome", "sienn"]
-        self.mock_player.fleets = ["UA", "paler"]
-        self.mock_player.home_countries = []
-
-        manager = IncomeManager(self.mock_game)
-
-        manager.player_income(self.mock_player)
-
-        # Comprobamos que se ha llamado a add_event
-        self.mock_game.add_event.assert_called_once()
-        event = self.mock_game.add_event.call_args[0][0]
-        self.assertIsInstance(event, TurnEvent)
-        self.assertEqual(event.type, EventType.PLAYER_INCOME)
-        self.assertEqual(event.data["player"], "player_1")
-        self.assertEqual(event.data["fixed_income"], 4)
-        self.assertEqual(set(event.data["locations"]), {"sienn", "paler", "rome", "UA"})
-        self.assertEqual(self.mock_player.ducats, 4)
-
-    def test_player_income_provinces_seas_and_cities(self):
-        """Calcula los ingresos de provincias, mares y ciudades"""
-        self.mock_player.ducats = 0
-
-        self.mock_player.controlled_locations = ["sienn", "paler", "flore"]
-        self.mock_player.armies = ["rome", "sienn"]
-        self.mock_player.fleets = ["UA", "paler"]
-        self.mock_player.garrisons = ["venic"]
-        self.mock_player.home_countries = []
-
-        manager = IncomeManager(self.mock_game)
-
-        manager.player_income(self.mock_player)
-
-        # Comprobamos que se ha llamado a add_event
-        self.mock_game.add_event.assert_called_once()
-        event = self.mock_game.add_event.call_args[0][0]
-        self.assertIsInstance(event, TurnEvent)
-        self.assertEqual(event.type, EventType.PLAYER_INCOME)
-        self.assertEqual(event.data["player"], "player_1")
-        self.assertEqual(event.data["fixed_income"], 5 + 3)
-        self.assertEqual(
-            set(event.data["locations"]),
-            {"sienn", "paler", "rome", "flore", "UA"},
-        )
-        self.assertEqual(
-            set(event.data["cities"]),
-            {"venic", "flore"},
-        )
-        self.assertEqual(self.mock_player.ducats, 5 + 3)
-
-    def test_player_income_famine(self):
-        """Calcula los ingresos con hambre"""
-        self.mock_player.ducats = 0
-
-        self.mock_player.controlled_locations = ["sienn", "paler", "flore"]
-        self.mock_player.armies = ["rome", "sienn"]
-        self.mock_player.fleets = ["UA", "paler"]
-        self.mock_player.garrisons = ["venic"]
-        self.mock_player.home_countries = []
-
-        # Los ingresos de las provincias con hambre no cuentan, pero sí las ciudades
-        # si tienen guarnición
-        self.mock_game.famine = ["rome", "venic", "flore"]
-
-        manager = IncomeManager(self.mock_game)
-
-        manager.player_income(self.mock_player)
-
-        # Comprobamos que se ha llamado a add_event
-        self.mock_game.add_event.assert_called_once()
-        event = self.mock_game.add_event.call_args[0][0]
-        self.assertIsInstance(event, TurnEvent)
-        self.assertEqual(event.type, EventType.PLAYER_INCOME)
-        self.assertEqual(event.data["player"], "player_1")
-        self.assertEqual(event.data["fixed_income"], 3 + 2)
-        self.assertEqual(
-            set(event.data["locations"]),
-            {"sienn", "paler", "UA"},
-        )
-        self.assertEqual(
-            set(event.data["cities"]),
-            {"venic"},
-        )
-        self.assertEqual(self.mock_player.ducats, 3 + 2)
-
-    def test_player_income_famine_and_rebellion(self):
-        """Calcula los ingresos con hambre y rebeliones"""
-        self.mock_player.ducats = 0
-
-        self.mock_player.controlled_locations = ["sienn", "paler", "flore"]
-        self.mock_player.armies = ["rome", "sienn"]
-        self.mock_player.fleets = ["UA", "paler"]
-        self.mock_player.garrisons = ["venic"]
-        self.mock_player.home_countries = []
-
-        # Los ingresos de las provincias con hambre no cuentan, pero sí las ciudades
-        # si tienen guarnición
-        self.mock_game.famine = ["rome"]
-        self.mock_player.rebelled_provinces = ["venic"]
-        self.mock_player.rebelled_cities = ["flore"]
-
-        manager = IncomeManager(self.mock_game)
-
-        manager.player_income(self.mock_player)
-
-        # Comprobamos que se ha llamado a add_event
-        self.mock_game.add_event.assert_called_once()
-        event = self.mock_game.add_event.call_args[0][0]
-        self.assertIsInstance(event, TurnEvent)
-        self.assertEqual(event.type, EventType.PLAYER_INCOME)
-        self.assertEqual(event.data["player"], "player_1")
-        self.assertEqual(event.data["fixed_income"], 3 + 2)
-        self.assertEqual(
-            set(event.data["locations"]),
-            {"sienn", "paler", "UA"},
-        )
-        self.assertEqual(
-            set(event.data["cities"]),
-            {"venic"},
-        )
-        self.assertEqual(self.mock_player.ducats, 3 + 2)
-
-    @patch("machiavelli.engine.income.GameTables")
-    def test_player_income_famine_and_rebellion_variable(self, mock_tables):
-        """Calcula los ingresos con hambre, rebelión, e ingresos variables."""
-        # Ajusto la tirada de las tablas
-        self.mock_rng.randint.side_effect = [0, 5]
-
-        # Y los datos necesarios
-        mock_tables.variable_income = {
-            "N": [1, 2, 3, 4, 5, 6],
-            "rome": [11, 12, 13, 14, 15, 16],
+def _manager() -> tuple[IncomeManager, Mock, Mock, Mock]:
+    game = create_mock_game()
+    player = create_mock_player("player_1")
+    player.ducats = 0
+    scenario = Mock(
+        variable_income_home_countries=["L", "N"],
+        variable_income_provinces=["rome"],
+    )
+    game_map = Mock(
+        provinces={
+            "venic": Mock(city="fortified", major_city=2),
+            "rome": Mock(city="fortified", major_city=2),
+            "flore": Mock(city="fortified", major_city=1),
+            "piomb": Mock(city="city", major_city=1),
+            "sienn": Mock(city=None, major_city=None),
+            "paler": Mock(city=None, major_city=None),
         }
+    )
+    game.scenario = scenario
+    game.map = game_map
+    game.require_scenario.return_value = scenario
+    game.require_map.return_value = game_map
+    return IncomeManager(game), game, player, scenario
 
-        self.mock_player.ducats = 0
 
-        self.mock_player.controlled_locations = ["sienn", "paler", "flore", "rome"]
-        self.mock_player.armies = ["rome", "sienn"]
-        self.mock_player.fleets = ["UA", "paler"]
-        self.mock_player.garrisons = ["venic"]
-        self.mock_player.home_countries = ["N"]
+def test_income_records_sorted_provinces_and_city_breakdown() -> None:
+    assert not hasattr(IncomeManager, "player_income")
+    manager, game, player, _ = _manager()
+    player.controlled_locations = ["sienn", "paler", "flore"]
+    player.armies = ["rome", "sienn"]
+    player.fleets = ["UA", "paler"]
+    player.garrisons = ["venic"]
 
-        # Los ingresos de las provincias con hambre no cuentan, pero sí las ciudades
-        # si tienen guarnición
-        self.mock_game.famine = ["rome"]
-        self.mock_player.rebelled_provinces = ["venic"]
-        self.mock_player.rebelled_cities = ["flore"]
+    manager._collect_player_income(player)
 
-        manager = IncomeManager(self.mock_game, self.mock_rng)
+    event = game.add_event.call_args.args[0]
+    assert isinstance(event, TurnEvent)
+    assert event.type is EventType.INCOME_COLLECTED
+    assert event.data == {
+        "player": "player_1",
+        "provinces": ("UA", "flore", "paler", "rome", "sienn"),
+        "province_income": 5,
+        "cities": ("flore", "venic"),
+        "city_income": 3,
+        "variable_income": (),
+        "total_income": 8,
+    }
+    assert player.ducats == 8
 
-        manager.player_income(self.mock_player)
 
-        # Comprobamos que se ha llamado a add_event
-        self.mock_game.add_event.assert_called_once()
-        event = self.mock_game.add_event.call_args[0][0]
-        self.assertIsInstance(event, TurnEvent)
-        self.assertEqual(event.type, EventType.PLAYER_INCOME)
-        self.assertEqual(event.data["player"], "player_1")
-        self.assertEqual(event.data["fixed_income"], 3 + 2)
-        self.assertEqual(
-            set(event.data["locations"]),
-            {"sienn", "paler", "UA"},
-        )
-        self.assertEqual(
-            set(event.data["cities"]),
-            {"venic"},
-        )
-        self.assertEqual(event.data["home_countries"], ["N"])
-        self.assertEqual(event.data["special_provinces"], ["rome"])
-        self.assertEqual(event.data["variable_income"], 1 + 16)
-        self.assertEqual(self.mock_player.ducats, 3 + 2 + 1 + 16)
+def test_income_excludes_famine_and_rebellions_but_keeps_garrison_city() -> None:
+    manager, game, player, _ = _manager()
+    player.controlled_locations = ["sienn", "paler", "flore"]
+    player.armies = ["rome", "sienn"]
+    player.fleets = ["UA", "paler"]
+    player.garrisons = ["venic"]
+    player.rebelled_provinces = ["venic"]
+    player.rebelled_cities = ["flore"]
+    game.famine = ["rome"]
+
+    manager._collect_player_income(player)
+
+    event = game.add_event.call_args.args[0]
+    assert event.data["provinces"] == ("UA", "paler", "sienn")
+    assert event.data["province_income"] == 3
+    assert event.data["cities"] == ("venic",)
+    assert event.data["city_income"] == 2
+    assert event.data["total_income"] == 5
+    assert player.ducats == 5
+
+
+@patch("machiavelli.engine.income.GameTables")
+def test_income_records_every_variable_roll_and_amount(mock_tables: Mock) -> None:
+    manager, game, player, _ = _manager()
+    rng = Mock()
+    rng.randint.side_effect = [1, 6]
+    manager.rng = rng
+    mock_tables.variable_income = {
+        "N": [1, 2, 3, 4, 5, 6],
+        "rome": [11, 12, 13, 14, 15, 16],
+    }
+    player.controlled_locations = ["sienn", "paler", "rome"]
+    player.armies = ["sienn"]
+    player.fleets = ["UA", "paler"]
+    player.garrisons = ["venic"]
+    player.home_countries = ["N"]
+    player.rebelled_provinces = ["venic"]
+    game.famine = ["rome"]
+
+    manager._collect_player_income(player)
+
+    event = game.add_event.call_args.args[0]
+    assert event.data["variable_income"] == (
+        {
+            "source_type": "home_country",
+            "source": "N",
+            "roll": 1,
+            "amount": 1,
+        },
+        {
+            "source_type": "province",
+            "source": "rome",
+            "roll": 6,
+            "amount": 16,
+        },
+    )
+    assert event.data["total_income"] == 22
+    assert player.ducats == 22
+
+
+def test_run_emits_one_income_event_per_player_in_player_order() -> None:
+    manager, game, first, scenario = _manager()
+    second = create_mock_player("player_2")
+    second.ducats = 0
+    game.players = [first, second]
+    first.controlled_locations = ["sienn"]
+    second.controlled_locations = ["paler"]
+    scenario.variable_income_home_countries = []
+    scenario.variable_income_provinces = []
+
+    manager.run()
+
+    events = [call.args[0] for call in game.add_event.call_args_list]
+    assert [event.type for event in events] == [
+        EventType.INCOME_COLLECTED,
+        EventType.INCOME_COLLECTED,
+    ]
+    assert [event.data["player"] for event in events] == ["player_1", "player_2"]
