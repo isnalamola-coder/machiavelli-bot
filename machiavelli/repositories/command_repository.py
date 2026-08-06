@@ -1,63 +1,103 @@
-# machiavelli/repositories/command_repository.py
+"""SQLite persistence for canonical :class:`Command` domain objects."""
+
+from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 
 from machiavelli.game.command import Command
+from machiavelli.game.player import Player
 
 
 class CommandRepository:
-    """Maneja la persistencia de objetos Command en la base de datos SQLite."""
+    """Translate between canonical commands and SQLite rows."""
 
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
 
-    def save(self, command: Command) -> None:
-        """Guarda un único comando en la base de datos."""
-        query = """
-            INSERT INTO commands (game_id, player_id, actor, command, target)
-            VALUES (?, ?, ?, ?, ?)
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            query,
-            (
-                command.game_id,
-                command.player_id,
-                command.actor,
-                command.command,
-                command.target,
-            ),
+    @staticmethod
+    def _player_identity(player: Player) -> tuple[int, str]:
+        game_id = player.game.database_id
+        if game_id is None:
+            raise ValueError("No se pueden persistir órdenes de una partida sin ID")
+        return game_id, player.player_id
+
+    @classmethod
+    def _command_row(
+        cls,
+        command: Command,
+    ) -> tuple[int, str, str, str, str | None]:
+        if command.game is not command.player.game:
+            raise ValueError("La orden y el jugador pertenecen a partidas distintas")
+        game_id, player_id = cls._player_identity(command.player)
+        return (
+            game_id,
+            player_id,
+            command.actor,
+            command.command,
+            command.target,
         )
-        self.conn.commit()
 
-    def save_many(self, commands: list[Command]) -> None:
-        """Guarda una lista de comandos en una sola transacción eficiente."""
-        query = """
+    def _save(self, command: Command) -> None:
+        self.conn.execute(
+            """
             INSERT INTO commands (game_id, player_id, actor, command, target)
             VALUES (?, ?, ?, ?, ?)
-        """
-        data = [
-            (c.game_id, c.player_id, c.actor, c.command, c.target) for c in commands
-        ]
-        cursor = self.conn.cursor()
-        cursor.executemany(query, data)
-        self.conn.commit()
+            """,
+            self._command_row(command),
+        )
 
-    def get_by_player(self, game_id: int, player_id: int) -> list[Command]:
-        """Recupera todas las órdenes registradas para un jugador en una partida."""
-        query = """
-            SELECT actor, command, target 
-            FROM commands 
+    def _save_many(self, commands: Iterable[Command]) -> None:
+        rows = [self._command_row(command) for command in commands]
+        if not rows:
+            return
+        self.conn.executemany(
+            """
+            INSERT INTO commands (game_id, player_id, actor, command, target)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    def _delete_by_player(self, player: Player) -> None:
+        game_id, player_id = self._player_identity(player)
+        self.conn.execute(
+            "DELETE FROM commands WHERE game_id = ? AND player_id = ?",
+            (game_id, player_id),
+        )
+
+    def save(self, command: Command) -> None:
+        """Persist one command without committing an enclosing transaction."""
+        if self.conn.in_transaction:
+            self._save(command)
+            return
+        with self.conn:
+            self._save(command)
+
+    def save_many(self, commands: Iterable[Command]) -> None:
+        """Persist commands atomically and preserve iterable order."""
+        if self.conn.in_transaction:
+            self._save_many(commands)
+            return
+        with self.conn:
+            self._save_many(commands)
+
+    def get_by_player(self, player: Player) -> list[Command]:
+        """Load a player's commands in their persisted relative order."""
+        game_id, player_id = self._player_identity(player)
+        rows = self.conn.execute(
+            """
+            SELECT actor, command, target
+            FROM commands
             WHERE game_id = ? AND player_id = ?
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(query, (game_id, player_id))
-        rows = cursor.fetchall()
-
+            ORDER BY commands.id ASC
+            """,
+            (game_id, player_id),
+        ).fetchall()
         return [
             Command(
-                game_id=game_id,
-                player_id=player_id,
+                game=player.game,
+                player=player,
                 actor=row[0],
                 command=row[1],
                 target=row[2],
@@ -65,9 +105,10 @@ class CommandRepository:
             for row in rows
         ]
 
-    def delete_by_player(self, game_id: int, player_id: int) -> None:
-        """Limpia las órdenes previas de un jugador (útil al reescribir órdenes de un turno)."""
-        query = "DELETE FROM commands WHERE game_id = ? AND player_id = ?"
-        cursor = self.conn.cursor()
-        cursor.execute(query, (game_id, player_id))
-        self.conn.commit()
+    def delete_by_player(self, player: Player) -> None:
+        """Delete commands without committing an enclosing transaction."""
+        if self.conn.in_transaction:
+            self._delete_by_player(player)
+            return
+        with self.conn:
+            self._delete_by_player(player)

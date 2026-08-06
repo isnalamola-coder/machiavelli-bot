@@ -7,6 +7,7 @@
       "home_countries": 2
     },
     "rules": {
+      "first_turn_famine": false,
       "fortress_active": false
     },
     "home_countries": {

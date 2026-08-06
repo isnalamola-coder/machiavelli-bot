@@ -14,6 +14,12 @@ class EventType(StrEnum):
     # Inicio de partida
     START_GAME_POWER_ASSIGNED = "start_game_power_assigned"
 
+    # Ingresos
+    PLAYER_INCOME = "player_income"
+
+    # Mantenimiento
+    PLAYER_MAINTENANCE = "player_maintenance"
+
     # Desastres
     FAMINE_SPAWN = "famine_spawn"
     FAMINE_ATTRITION = "famine_attrition"
@@ -60,7 +66,7 @@ class TurnEvent:
         event_type: EventType,
         actor: str,
         expense_type: str,
-        target: str,
+        target: str | None,
         amount: int | str,
     ) -> Self:
         """Factory method para construir eventos de gasto."""

@@ -4,6 +4,7 @@ from random import Random
 
 from ..events import EventType, TurnEvent
 from ..game.game import Game
+from ..game.map import Map
 from ..game.tables import GameTables
 
 
@@ -14,6 +15,13 @@ class DisastersManager:
         """Constructor del manager."""
         self.game = game
         self.rng = rng if rng is not None else Random()
+
+    def _map(self) -> Map:
+        """Devuelve el mapa activo conservando la interfaz histórica de Game."""
+        game_map = self.game.map
+        if game_map is None:
+            raise RuntimeError("La partida requiere un mapa cargado")
+        return game_map
 
     def process_famine_relief_expenses(self) -> None:
         """Procesa los gastos de Paliar hambruna."""
@@ -107,6 +115,7 @@ class DisastersManager:
             else GameTables.plague
         )
         affected_provinces: list[str] = []
+        game_map = self._map()
 
         # Fila
         if severity[0] in ["both", "row"]:
@@ -115,7 +124,7 @@ class DisastersManager:
             for p in row:
                 if (
                     p is not None
-                    and p in self.game.map.provinces
+                    and p in game_map.provinces
                     and p not in affected_provinces
                 ):
                     affected_provinces.append(p)
@@ -127,7 +136,7 @@ class DisastersManager:
             for p in column:
                 if (
                     p is not None
-                    and p in self.game.map.provinces
+                    and p in game_map.provinces
                     and p not in affected_provinces
                 ):
                     affected_provinces.append(p)

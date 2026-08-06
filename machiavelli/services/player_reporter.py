@@ -25,6 +25,8 @@ class PlayerReporter:
         """
         game = player.game
         game_map = game.map
+        if game_map is None:
+            raise RuntimeError("La partida requiere un mapa cargado")
         besieges = game.besieges
 
         report = []

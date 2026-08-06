@@ -1,4 +1,4 @@
-# machiavelli/services/command_reporter.py
+"""Readable command reporting."""
 
 from __future__ import annotations
 
@@ -8,33 +8,24 @@ from machiavelli.game.tables import GameTables
 
 if TYPE_CHECKING:
     from machiavelli.game.command import Command
-    from machiavelli.game.map import GameMap
+    from machiavelli.game.map import Location, Map, Province
 
 
 class CommandReporter:
-    """Responsable exclusivo de generar representaciones legibles de las órdenes."""
+    """Generate readable representations of player commands."""
 
     @staticmethod
-    def format_report(command: Command, game_map: GameMap, turn_number: int) -> str:
-        """Genera una representación legible del comando.
-
-        Args:
-            command (Command): La orden a formatear.
-            game_map (GameMap): Instancia del mapa de la partida para resolver nombres.
-            turn_number (int): Turno para determinar si es mantenimiento o campaña.
-
-        Returns:
-            str: Descripción formateada de la orden separada por '|'.
-        """
-        locations = game_map.provinces | game_map.seas
+    def format_report(command: Command, game_map: Map, turn_number: int) -> str:
+        """Return a human-readable command description separated by ``|``."""
+        locations: dict[str, Location] = dict(game_map.provinces)
+        locations.update(game_map.seas)
         provinces = game_map.provinces
 
         try:
-            report = []
-            target_type = None
+            report: list[str] = []
+            target_type: str | None = None
 
-            # Parsear Actor
-            actor_type, actor_id = command.actor.split()
+            actor_type, actor_id = command.actor.split(maxsplit=1)
 
             if actor_type in ("A", "F", "G"):
                 actor_name = GameTables.actors.get(actor_type, actor_type)
@@ -43,47 +34,57 @@ class CommandReporter:
                 )
                 report.append(f"{actor_name} de {loc_name}")
             elif actor_type == "E":
-                expense_info = GameTables.expenses.get(actor_id, {})
-                report.append(expense_info.get("text", actor_id))
-                target_type = expense_info.get("target_type")
+                expense_info = GameTables.expenses.get(actor_id)
+                if expense_info is None:
+                    report.append(actor_id)
+                else:
+                    report.append(expense_info["text"])
+                    target_type = expense_info["target_type"]
 
-            # Parsear Comando
             if actor_type in ("A", "F", "G"):
-                is_spring_maintenance = turn_number % 4 == 1
                 orders_table = (
                     GameTables.maintenance_orders
-                    if is_spring_maintenance
+                    if turn_number % 4 == 1
                     else GameTables.military_orders
                 )
-                cmd_info = orders_table.get(command.command, {})
-                report.append(cmd_info.get("text", command.command))
-                target_type = cmd_info.get("target_type")
+                command_info = orders_table.get(command.command)
+                if command_info is None:
+                    report.append(command.command)
+                else:
+                    report.append(command_info["text"])
+                    target_type = command_info["target_type"]
 
-            # Parsear Target
             if target_type:
                 CommandReporter._append_target_report(
-                    report, command, target_type, locations, provinces
+                    report,
+                    command,
+                    target_type,
+                    locations,
+                    provinces,
                 )
 
             if actor_type == "E":
                 report.append(f"{command.command} ducados")
 
             return "|".join(report)
-
-        except (KeyError, ValueError, IndexError) as err:
-            return f"Orden inválida ({err})"
+        except (KeyError, ValueError, IndexError) as error:
+            return f"Orden inválida ({error})"
 
     @staticmethod
     def _append_target_report(
         report: list[str],
         command: Command,
         target_type: str,
-        locations: dict,
-        provinces: dict,
+        locations: dict[str, Location],
+        provinces: dict[str, Province],
     ) -> None:
-        """Método auxiliar para formatear la sección del objetivo del comando."""
+        """Append the formatted command target when one is present."""
+        target = command.target
+        if target is None:
+            return
+
         if target_type == "army_ext":
-            parts = command.target.split()
+            parts = target.split()
             actor_name = GameTables.actors.get(parts[0], parts[0])
             prov_name = provinces[parts[1]].name if parts[1] in provinces else parts[1]
             if len(parts) > 2:
@@ -93,14 +94,10 @@ class CommandReporter:
                 report.append(f"{actor_name} de {prov_name}")
 
         elif target_type == "location":
-            report.append(
-                locations[command.target].name
-                if command.target in locations
-                else command.target
-            )
+            report.append(locations[target].name if target in locations else target)
 
         elif target_type == "location_ext":
-            parts = command.target.split()
+            parts = target.split()
             loc_name = locations[parts[0]].name if parts[0] in locations else parts[0]
             if len(parts) > 1:
                 power_name = GameTables.powers.get(parts[1], parts[1])
@@ -109,23 +106,19 @@ class CommandReporter:
                 report.append(loc_name)
 
         elif target_type == "province":
-            report.append(
-                provinces[command.target].name
-                if command.target in provinces
-                else command.target
-            )
+            report.append(provinces[target].name if target in provinces else target)
 
         elif target_type == "power":
-            report.append(GameTables.powers.get(command.target, command.target))
+            report.append(GameTables.powers.get(target, target))
 
         elif target_type == "unit":
-            parts = command.target.split()
+            parts = target.split()
             actor_name = GameTables.actors.get(parts[0], parts[0])
             prov_name = provinces[parts[1]].name if parts[1] in provinces else parts[1]
             report.append(f"{actor_name} de {prov_name}")
 
         elif target_type == "unit_type":
-            if command.target == "0":
+            if target == "0":
                 report.append("Desbandar")
             else:
-                report.append(GameTables.actors.get(command.target, command.target))
+                report.append(GameTables.actors.get(target, target))

@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 from machiavelli.engine.disasters import DisastersManager
 from machiavelli.events import EventType, TurnEvent
-from machiavelli.game.game import Command
+from machiavelli.game.command import Command
 from tests.machiavelli.engine.helpers import create_mock_game
 
 

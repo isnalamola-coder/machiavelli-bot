@@ -35,9 +35,21 @@ DISCORD_TOKEN=tu_token_aqui
 DATABASE_PATH=game.db
 ```
 
+## Instalación
+
+Machiavelli requiere Python 3.13 o posterior. Para instalar el paquete en modo
+desarrollo con sus herramientas de calidad:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+La instalación de producción se puede realizar con `pip install .` o desde una
+distribución wheel generada mediante `python -m build`.
+
 ## Versión
 
-La versión actual de desarrollo es la 0.5.0. La versión actual de producción es la 0.4.2.
+Versión de desarrollo actual: 0.5.0.dev0. Última versión estable publicada: 0.4.2.
 
 ## Comandos disponibles
 
@@ -141,7 +153,7 @@ Se prevén las siguientes versiones
 ### Versión 0.6.0
 
 - [ ] Ampliación de GameEngine para soportar las operaciones que los jugadores vayan incorporando a sus órdenes.
-  - [ ] SetupManager, para el setup inicial de la partida (antes en Game)
+  - [X] SetupManager, para el setup inicial de la partida (antes en Game)
 - [ ] Reescritura y refactorización de prácticamente todo el código.
   - [X] Creación del package db, para la gestión de la base de datos.
   - [ ] Creación del package repositories, encargado de la persistencia de los elementos del juego.
