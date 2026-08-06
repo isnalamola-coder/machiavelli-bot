@@ -104,7 +104,7 @@ class GameEngine:
         BribeResolver(self.game).run()
         AssassinationResolver(self.game).run()
         # Un fallo militar interrumpe la campaña antes de hambre, control y plaga.
-        MilitaryResolver(self.game).run(dislodgement_resolver=RetreatHandler())
+        MilitaryResolver(self.game).run(dislodgement_resolver=RetreatHandler(self.game))
         if season == 2:
             disaster_manager.resolve_famine_attrition()
         ControlManager(self.game).run()
