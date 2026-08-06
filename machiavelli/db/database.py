@@ -6,7 +6,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _UPGRADES: tuple[str, ...] = (
     # SCHEMA 1
@@ -69,6 +69,16 @@ _UPGRADES: tuple[str, ...] = (
     """,
 )
 
+_GAME_EVENTS_V4_SQL = """\
+CREATE TABLE game_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+)
+"""
+
 
 def upgrade_connection(conn: sqlite3.Connection) -> None:
     """Apply pending migrations without taking ownership of the connection."""
@@ -89,12 +99,21 @@ def upgrade_connection(conn: sqlite3.Connection) -> None:
 
     target_version = current_version
     try:
-        for version in range(current_version, _SCHEMA_VERSION):
+        for version in range(current_version, min(_SCHEMA_VERSION, 3)):
             target_version = version + 1
             logger.info("Aplicando migración a versión %d...", target_version)
             cursor.executescript(_UPGRADES[version])
             cursor.execute(f"PRAGMA user_version = {target_version};")
         conn.commit()
+
+        if current_version < 4 <= _SCHEMA_VERSION:
+            target_version = 4
+            logger.info("Aplicando migración a versión 4...")
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute("DROP TABLE game_events")
+            cursor.execute(_GAME_EVENTS_V4_SQL)
+            cursor.execute("PRAGMA user_version = 4")
+            conn.commit()
     except Exception:
         conn.rollback()
         logger.exception("Falló la actualización al esquema %d.", target_version)

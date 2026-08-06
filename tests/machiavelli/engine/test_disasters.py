@@ -17,8 +17,10 @@ class TestFamineReliefExpenses(unittest.TestCase):
     def setUp(self):
         self.mock_game = create_mock_game()
         self.player1 = Mock()
+        self.player1.player_id = "P1"
         self.player1.commands = []
         self.player2 = Mock()
+        self.player2.player_id = "P2"
         self.player2.commands = []
         self.mock_game.players = [self.player1, self.player2]
         self.processor = DisastersManager(self.mock_game)
@@ -40,8 +42,12 @@ class TestFamineReliefExpenses(unittest.TestCase):
 
         self.processor.process_famine_relief_expenses()
 
-        # Verifica que se eliminó el hambre de la provincia afectada
+        # Verifica la reducción real y el único hecho emitido.
         self.assertNotIn("flore", self.mock_game.famine)
+        self.mock_game.add_event.assert_called_once()
+        event = self.mock_game.add_event.call_args.args[0]
+        self.assertEqual(event.type, EventType.FAMINE_RELIEF)
+        self.assertEqual(event.data, {"player": "P1", "province": "flore"})
 
     @patch("machiavelli.engine.disasters.GameTables")
     def test_famine_relief_other_expense(self, mock_tables):
@@ -59,8 +65,9 @@ class TestFamineReliefExpenses(unittest.TestCase):
 
         self.processor.process_famine_relief_expenses()
 
-        # Verifica que no se eliminó el hambre en Pisa
+        # Verifica que no se eliminó el hambre en Pisa ni se emitió un hecho.
         self.assertIn("pisa", self.mock_game.famine)
+        self.mock_game.add_event.assert_not_called()
 
     @patch("machiavelli.engine.disasters.GameTables")
     def test_famine_relief_short_amount(self, mock_tables):
@@ -78,8 +85,9 @@ class TestFamineReliefExpenses(unittest.TestCase):
 
         self.processor.process_famine_relief_expenses()
 
-        # Verifica que no se eliminó el hambre en Pisa
+        # Verifica que no se eliminó el hambre ni se emitió un hecho.
         self.assertIn("flore", self.mock_game.famine)
+        self.mock_game.add_event.assert_not_called()
 
     @patch("machiavelli.engine.disasters.GameTables")
     def test_famine_relief_short_amount_multiple_players(self, mock_tables):
@@ -113,9 +121,17 @@ class TestFamineReliefExpenses(unittest.TestCase):
 
         self.processor.process_famine_relief_expenses()
 
-        # Verifica que se eliminaron "flore" y "pisa"
+        # Verifica que cada reducción real emite una sola vez, sin duplicar Flore.
         self.assertNotIn("flore", self.mock_game.famine)
         self.assertNotIn("pisa", self.mock_game.famine)
+        events = [item.args[0] for item in self.mock_game.add_event.call_args_list]
+        self.assertEqual(
+            [(event.type, event.data) for event in events],
+            [
+                (EventType.FAMINE_RELIEF, {"player": "P1", "province": "flore"}),
+                (EventType.FAMINE_RELIEF, {"player": "P2", "province": "pisa"}),
+            ],
+        )
 
 
 class TestApplyDisasterDeaths(unittest.TestCase):
@@ -189,7 +205,7 @@ class TestApplyDisasterDeaths(unittest.TestCase):
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.FAMINE_ATTRITION)
         self.assertIsNone(event.data["player"])
-        self.assertEqual(event.data["units"], ["G flore", "G pisa"])
+        self.assertEqual(event.data["units"], ("G flore", "G pisa"))
 
     def test_apply_disaster_deaths_no_units_affected(self):
         """No se registran eventos si ninguna unidad es afectada."""
@@ -244,7 +260,7 @@ class TestClearFamine(unittest.TestCase):
         event = self.mock_game.add_event.call_args[0][0]
         self.assertIsInstance(event, TurnEvent)
         self.assertEqual(event.type, EventType.FAMINE_END)
-        self.assertEqual(event.data, {"provinces": ["pisa", "flore"]})
+        self.assertEqual(event.data, {"provinces": ("pisa", "flore")})
 
     def test_clear_famine_empty(self):
         """Si la lista de hambrunas está vacía, no debe emitir ningún evento."""
@@ -268,6 +284,7 @@ class TestSpawnDisaster(unittest.TestCase):
             "sienn": Mock(),
         }
         self.mock_game.map = self.mock_map
+        self.mock_game.require_map.return_value = self.mock_map
         self.mock_rng = Mock()
 
         self.mock_game.map = self.mock_map
@@ -294,7 +311,7 @@ class TestSpawnDisaster(unittest.TestCase):
 
         # 1a llamada: severity_dice (0)
         # 2a y 3a llamada: dado fila (1 + 1 = 2)
-        self.mock_rng.randint.side_effect = [0, 1, 1]
+        self.mock_rng.randint.side_effect = [1, 1, 1]
 
         result = self.manager._spawn_disaster(EventType.FAMINE_SPAWN)
 
@@ -303,7 +320,10 @@ class TestSpawnDisaster(unittest.TestCase):
 
         event = self.mock_game.add_event.call_args[0][0]
         self.assertEqual(event.type, EventType.FAMINE_SPAWN)
-        self.assertEqual(event.data, {"severity": 0, "provinces": ["pisa", "flore"]})
+        self.assertEqual(
+            event.data,
+            {"severity_roll": 1, "provinces": ("pisa", "flore")},
+        )
 
     @patch("machiavelli.engine.disasters.GameTables")
     def test_spawn_disaster_both(self, mock_tables):
@@ -318,12 +338,18 @@ class TestSpawnDisaster(unittest.TestCase):
         # 1a: severity_dice (1)
         # 2a, 3a: dado fila (0 + 0 = 0) -> Fila 0: ["pisa", "flore"]
         # 4a, 5a: dado columna (0 + 0 = 0) -> Columna 0: ["pisa", "pisa"]
-        self.mock_rng.randint.side_effect = [1, 0, 0, 0, 0]
+        self.mock_rng.randint.side_effect = [2, 0, 0, 0, 0]
 
         result = self.manager._spawn_disaster(EventType.PLAGUE_SPAWN)
 
-        # 'pisa' solo debe aparecer una vez
+        # 'pisa' solo debe aparecer una vez y el evento conserva la tirada pública.
         self.assertEqual(result, ["pisa", "flore"])
+        event = self.mock_game.add_event.call_args.args[0]
+        self.assertEqual(event.type, EventType.PLAGUE_SPAWN)
+        self.assertEqual(
+            event.data,
+            {"severity_roll": 2, "provinces": ("pisa", "flore")},
+        )
 
     @patch("machiavelli.engine.disasters.GameTables")
     def test_spawn_disaster_filters_out_provinces_not_on_map(self, mock_tables):
@@ -332,7 +358,7 @@ class TestSpawnDisaster(unittest.TestCase):
         # "unkno" no está en self.mock_map.provinces
         mock_tables.famine = [["pisa", None, "unkno"]]
 
-        self.mock_rng.randint.side_effect = [0, 0, 0]
+        self.mock_rng.randint.side_effect = [1, 0, 0]
 
         result = self.manager._spawn_disaster(EventType.FAMINE_SPAWN)
 

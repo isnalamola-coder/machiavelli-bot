@@ -2,9 +2,11 @@
 
 import unittest
 from collections import defaultdict
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from machiavelli.engine.bribes import Bribe, BribeResolver
+from machiavelli.events import EventType
 from machiavelli.game.map import MovementMode
 from tests.machiavelli.engine.helpers import create_mock_game, create_mock_player
 
@@ -240,9 +242,16 @@ class TestExecuteBribe(unittest.TestCase):
         self.mock_game.add_event.assert_called_once()
 
         event_call = self.mock_game.add_event.call_args[0][0]
-        self.assertEqual(event_call.data["expense"], "G")
-        self.assertEqual(event_call.data["target"], "G pisa")
-        self.assertEqual(event_call.data["amount"], 9)
+        self.assertEqual(event_call.type, EventType.BRIBE_EXECUTED)
+        self.assertEqual(
+            event_call.data,
+            {
+                "player": "Actor",
+                "expense": "G",
+                "target": "G pisa",
+                "amount": 9,
+            },
+        )
 
     def test_execute_bribe_remove_independent_garrison(self):
         """Elimina una guarnición autónoma de la lista del juego."""
@@ -478,6 +487,14 @@ class TestResolveBribes(unittest.TestCase):
         self.resolver.resolve_bribes()
 
         mock_execute.assert_not_called()
+
+
+def test_bribe_set_is_not_a_public_or_emitted_event() -> None:
+    assert "bribe_set" not in {event_type.value for event_type in EventType}
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8") for path in Path("machiavelli").rglob("*.py")
+    )
+    assert "bribe_set" not in production_source
 
 
 class TestBribeResolverRun(unittest.TestCase):

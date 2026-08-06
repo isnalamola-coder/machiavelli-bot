@@ -9,13 +9,6 @@ from .bribes import BribeResolver
 from .control import ControlManager
 from .disasters import DisastersManager
 from .dislodgement import RetreatHandler
-from .exceptions import (
-    DuplicatePlayerError,
-    GameAlreadyStartedError,
-    InvalidPlayerCountError,
-    ScenarioNotSelectedError,
-    TurnExecutionFailed,
-)
 from .expenditure import ExpenditureProcessor
 from .income import IncomeManager
 from .maintenance import MaintenanceResolver
@@ -44,17 +37,7 @@ class GameEngine:
         #   lista para comenzar, sortea las facciones entre los jugadores y establece
         #   la posición y recursos iniciales.
         # 2. Se ejecuta el inicio de la primavera. La aparición de hambre y los ingresos
-        try:
-            SetupManager(self.game, self.rng).run()
-        except (
-            DuplicatePlayerError,
-            InvalidPlayerCountError,
-            ScenarioNotSelectedError,
-            GameAlreadyStartedError,
-        ) as e:
-            raise TurnExecutionFailed(
-                f"Fallo en la inicialización de la partida: {e}"
-            ) from e
+        SetupManager(self.game, self.rng).run()
 
         # Una vez arrancada la partida, corremos las primeras fases
         DisastersManager(self.game).spawn_famine()
@@ -96,7 +79,6 @@ class GameEngine:
         # 10. Se elimina el hambre (solo inicio de verano, season==2)
         # 11. Se resuelve la plaga (solo inicio de verano, season==2)
         disaster_manager = DisastersManager(self.game)  # Lo usaremos varias veces
-        self.game.turn_events = []  # Vaciamos los eventos al comenzar
 
         ExpenditureProcessor(self.game).run()
         disaster_manager.process_famine_relief_expenses()
@@ -125,6 +107,8 @@ class GameEngine:
             (turn_number % 4 == 1)
         3. Los turnos de campaña, que se ejecutan en primavera/verano/otoño
         """
+        self.game.turn_events = []
+
         if self.game.turn_number == 0:
             self.run_startup()
         elif (self.game.turn_number % 4) == 1:
