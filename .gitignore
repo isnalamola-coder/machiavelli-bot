@@ -21,6 +21,8 @@ htmlcov/
 .agents/
 .codegraph/
 NUL
+.specify/
+docs/
 
 # Universal
 .env
