@@ -206,7 +206,7 @@ class Game:
                 "Primavera (campaña)",
                 "Verano",
                 "Otoño",
-            )[(self.turn_number) % 4]
+            )[(self.turn_number - 1) % 4]
             report.append(f"### __**Estado:** {season} de {year}__")
             report.append("**Han enviado sus órdenes:**")
             ordered_players = [player for player in self.players if player.commands]
