@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
+from machiavelli.db.database import DatabaseManager
 from machiavelli.engine import GameEngine
-from machiavelli.engine.military import DislodgementResolver
 from machiavelli.game import (
     Command,
     Game,
@@ -23,6 +26,16 @@ from .turn_reporter import TurnReporter
 type PlayerInfo = tuple[str, int | None]
 type ActorOption = tuple[str, str]
 type GameStatusDict = dict[str, Any]
+
+
+@contextmanager
+def game_service_session(db_path: str | Path) -> Iterator[GameService]:
+    """Yield one service over one SQLite connection and always close it."""
+    connection = DatabaseManager(db_path).get_connection()
+    try:
+        yield GameService(GameRepository(connection))
+    finally:
+        connection.close()
 
 
 class GameService:
@@ -179,12 +192,7 @@ class GameService:
         player = self.resolve_player(game, discord_id)
         return player.player_id, [str(command) for command in player.commands]
 
-    def run_turn(
-        self,
-        channel_id: int,
-        *,
-        dislodgement_resolver: DislodgementResolver | None = None,
-    ) -> list[str]:
+    def run_turn(self, channel_id: int) -> list[str]:
         """Execute one turn, then persist the resulting aggregate atomically."""
         game = self.get_game(channel_id)
         GameEngine(game).run()

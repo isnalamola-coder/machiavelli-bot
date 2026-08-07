@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
+from inspect import signature
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
@@ -11,6 +12,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from machiavelli import database
+from machiavelli.engine import GameEngine
+from machiavelli.engine.military import DislodgementResolverRequired
 from machiavelli.events import InvalidTurnEventError
 from machiavelli.game import Command as PublicCommand
 from machiavelli.game import DuplicatePlayerException, PlayerNotFoundException
@@ -20,12 +23,64 @@ from machiavelli.game.command import Command
 from machiavelli.game.game import Game
 from machiavelli.game.player import Player
 from machiavelli.repositories.game_repository import GameRepository
-from machiavelli.services import GameService
+from machiavelli.services import GameService, game_service_session
 
 
 def make_service(conn: sqlite3.Connection) -> GameService:
     database.upgrade_connection(conn)
     return GameService(GameRepository(conn))
+
+
+def test_game_service_session_builds_once_and_closes_on_success() -> None:
+    connection = Mock(name="connection")
+    manager = Mock(name="manager")
+    manager.get_connection.return_value = connection
+    repository = Mock(name="repository")
+    service = Mock(name="service")
+    db_path = Path("game.db")
+
+    with (
+        patch(
+            "machiavelli.services.game_service.DatabaseManager",
+            return_value=manager,
+        ) as manager_class,
+        patch(
+            "machiavelli.services.game_service.GameRepository",
+            return_value=repository,
+        ) as repository_class,
+        patch(
+            "machiavelli.services.game_service.GameService",
+            return_value=service,
+        ) as service_class,
+    ):
+        with game_service_session(db_path) as yielded:
+            assert yielded is service
+
+    manager_class.assert_called_once_with(db_path)
+    manager.get_connection.assert_called_once_with()
+    repository_class.assert_called_once_with(connection)
+    service_class.assert_called_once_with(repository)
+    connection.close.assert_called_once_with()
+
+
+def test_game_service_session_closes_on_exception() -> None:
+    connection = Mock(name="connection")
+    manager = Mock(name="manager")
+    manager.get_connection.return_value = connection
+    failure = RuntimeError("boom")
+
+    with (
+        patch(
+            "machiavelli.services.game_service.DatabaseManager",
+            return_value=manager,
+        ),
+        pytest.raises(RuntimeError) as caught,
+    ):
+        with game_service_session("game.db"):
+            raise failure
+
+    assert caught.value is failure
+    connection.close.assert_called_once_with()
 
 
 def test_create_load_and_status_use_the_canonical_domain() -> None:
@@ -128,6 +183,11 @@ def test_submit_and_replace_command_survive_reload() -> None:
         )
 
 
+def test_turn_boundaries_do_not_accept_a_dislodgement_resolver() -> None:
+    assert "dislodgement_resolver" not in signature(GameService.run_turn).parameters
+    assert "dislodgement_resolver" not in signature(GameEngine).parameters
+
+
 def test_get_turn_report_uses_the_reporter_and_returns_its_lines() -> None:
     repository = Mock(name="repository")
     game = Mock(name="game")
@@ -145,26 +205,92 @@ def test_get_turn_report_uses_the_reporter_and_returns_its_lines() -> None:
     repository.save.assert_not_called()
 
 
-def test_run_turn_uses_the_reporter_before_saving() -> None:
+def test_run_turn_uses_strict_load_engine_reporter_save_order() -> None:
+    calls: list[str] = []
     repository = Mock(name="repository")
     game = Mock(name="game")
-    repository.get_by_channel.return_value = game
+    repository.get_by_channel.side_effect = lambda _channel_id: (
+        calls.append("load") or game
+    )
+    repository.save.side_effect = lambda _game: calls.append("save")
     service = GameService(repository)
 
     with (
         patch("machiavelli.services.game_service.GameEngine") as engine_class,
-        patch(
-            "machiavelli.services.game_service.TurnReporter.generate",
-            return_value=["turn report"],
-        ) as generate,
+        patch("machiavelli.services.game_service.TurnReporter.generate") as generate,
     ):
+        engine_class.return_value.run.side_effect = lambda: calls.append("engine")
+        generate.side_effect = lambda _game: calls.append("reporter") or ["turn report"]
         report = service.run_turn(7005)
 
     assert report == ["turn report"]
+    assert calls == ["load", "engine", "reporter", "save"]
     engine_class.assert_called_once_with(game)
     engine_class.return_value.run.assert_called_once_with()
     generate.assert_called_once_with(game)
     repository.save.assert_called_once_with(game)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("engine failed"),
+        InvalidTurnEventError(row_id=4, event_type="broken"),
+        DislodgementResolverRequired("retreat required"),
+    ],
+)
+def test_run_turn_does_not_save_when_engine_fails(failure: Exception) -> None:
+    repository = Mock(name="repository")
+    repository.get_by_channel.return_value = Mock(name="game")
+    service = GameService(repository)
+
+    with (
+        patch("machiavelli.services.game_service.GameEngine") as engine_class,
+        pytest.raises(type(failure)) as caught,
+    ):
+        engine_class.return_value.run.side_effect = failure
+        service.run_turn(7006)
+
+    assert caught.value is failure
+    repository.save.assert_not_called()
+
+
+def test_run_turn_rolls_back_persistence_when_save_fails() -> None:
+    with closing(sqlite3.connect(":memory:")) as conn:
+        service = make_service(conn)
+        service.create_game("Rollback", 7007, "Be")
+        before = conn.execute(
+            "SELECT name, channel_id, scenario_id, turn_number FROM games"
+        ).fetchall()
+        conn.execute(
+            """
+            CREATE TRIGGER fail_game_update
+            BEFORE UPDATE ON games
+            BEGIN
+                SELECT RAISE(ABORT, 'forced save failure');
+            END
+            """
+        )
+
+        with (
+            patch("machiavelli.services.game_service.GameEngine") as engine_class,
+            patch(
+                "machiavelli.services.game_service.TurnReporter.generate",
+                return_value=["turn report"],
+            ),
+            pytest.raises(sqlite3.IntegrityError),
+        ):
+            engine_class.return_value.run.side_effect = lambda: setattr(
+                engine_class.call_args.args[0],
+                "turn_number",
+                1,
+            )
+            service.run_turn(7007)
+
+        after = conn.execute(
+            "SELECT name, channel_id, scenario_id, turn_number FROM games"
+        ).fetchall()
+        assert after == before
 
 
 def test_run_turn_does_not_save_when_reporting_fails() -> None:

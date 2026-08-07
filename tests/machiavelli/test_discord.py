@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import ast
+import asyncio
 import os
 import subprocess
 import sys
+import threading
 import unittest
 from contextlib import contextmanager
+from inspect import signature
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, Mock, patch
@@ -20,7 +24,6 @@ from machiavelli.discord import (
     _get_player_commands,
     _get_status_report,
     _get_turn_report,
-    _service_session,
     _set_scenario_record,
     _submit_command_record,
     _submit_expense_record,
@@ -47,6 +50,7 @@ from machiavelli.game import (
     GameNotFoundException,
     PlayerNotFoundException,
 )
+from machiavelli.services import game_service_session
 
 
 def make_interaction(*, channel_id: int = 321, discord_id: int = 654) -> Mock:
@@ -64,40 +68,58 @@ def make_interaction(*, channel_id: int = 321, discord_id: int = 654) -> Mock:
 
 
 class TestServiceWorkers(unittest.TestCase):
-    """Verify that synchronous workers own and close their service session."""
+    """Verify that synchronous workers stay behind the service boundary."""
 
-    @patch("machiavelli.discord.sqlite3.connect")
-    def test_service_session_always_closes_connection(self, mock_connect: Mock) -> None:
-        connection = mock_connect.return_value
+    def test_all_synchronous_database_helpers_use_one_service_session(self) -> None:
+        module = ast.parse(Path("machiavelli/discord.py").read_text(encoding="utf-8"))
+        helpers = [
+            node
+            for node in module.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name.startswith("_")
+            and [*node.args.posonlyargs, *node.args.args]
+            and [*node.args.posonlyargs, *node.args.args][0].arg == "db_path"
+        ]
 
-        with _service_session("game.db") as service:
-            self.assertIs(service.repo.conn, connection)
+        self.assertTrue(helpers)
+        for helper in helpers:
+            sessions = [
+                node
+                for node in ast.walk(helper)
+                if isinstance(node, ast.With)
+                and len(node.items) == 1
+                and isinstance(node.items[0].context_expr, ast.Call)
+                and isinstance(node.items[0].context_expr.func, ast.Name)
+                and node.items[0].context_expr.func.id == "game_service_session"
+                and len(node.items[0].context_expr.args) == 1
+                and isinstance(node.items[0].context_expr.args[0], ast.Name)
+                and node.items[0].context_expr.args[0].id == "db_path"
+                and not node.items[0].context_expr.keywords
+                and isinstance(node.items[0].optional_vars, ast.Name)
+                and node.items[0].optional_vars.id == "service"
+            ]
+            self.assertEqual(len(sessions), 1, helper.name)
 
-        mock_connect.assert_called_once_with("game.db")
-        connection.close.assert_called_once_with()
+    def test_run_game_worker_has_no_dislodgement_resolver_parameter(self) -> None:
+        self.assertNotIn(
+            "dislodgement_resolver",
+            signature(_execute_game_turn).parameters,
+        )
 
     def test_run_game_worker_delegates_to_service(self) -> None:
         service = Mock(name="service")
         service.run_turn.return_value = ["line one", "line two"]
-        resolver = Mock(name="resolver")
 
         @contextmanager
         def fake_session(db_path: str):
             self.assertEqual(db_path, "game.db")
             yield service
 
-        with patch("machiavelli.discord._service_session", fake_session):
-            report = _execute_game_turn(
-                "game.db",
-                123,
-                dislodgement_resolver=resolver,
-            )
+        with patch("machiavelli.discord.game_service_session", fake_session):
+            report = _execute_game_turn("game.db", 123)
 
         self.assertEqual(report, ("line one", "line two"))
-        service.run_turn.assert_called_once_with(
-            123,
-            dislodgement_resolver=resolver,
-        )
+        service.run_turn.assert_called_once_with(123)
 
     def test_run_game_worker_propagates_atomic_failure(self) -> None:
         service = Mock(name="service")
@@ -109,7 +131,7 @@ class TestServiceWorkers(unittest.TestCase):
             yield service
 
         with (
-            patch("machiavelli.discord._service_session", fake_session),
+            patch("machiavelli.discord.game_service_session", fake_session),
             self.assertRaises(InvalidMilitaryState) as caught,
         ):
             _execute_game_turn("game.db", 123)
@@ -134,7 +156,7 @@ class TestServiceWorkers(unittest.TestCase):
                 "Florencia",
             )
 
-            with _service_session(db_path) as service:
+            with game_service_session(db_path) as service:
                 game = service.get_game(8080)
                 game.turn_number = 2
                 game.players[0].armies = ["milan"]
@@ -430,6 +452,38 @@ class TestRunGame(unittest.IsolatedAsyncioTestCase):
             ephemeral=False,
         )
         interaction.edit_original_response.assert_not_awaited()
+
+    async def test_run_game_worker_leaves_the_event_loop_available(self) -> None:
+        interaction = make_interaction()
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        witness_completed = asyncio.Event()
+
+        def blocked_worker(_db_path: str, _channel_id: int) -> tuple[str, ...]:
+            worker_started.set()
+            if not release_worker.wait(timeout=2):
+                raise AssertionError("worker was not released")
+            return ("done",)
+
+        async def witness() -> None:
+            while not worker_started.is_set():
+                await asyncio.sleep(0)
+            witness_completed.set()
+
+        with patch(
+            "machiavelli.discord._execute_game_turn",
+            side_effect=blocked_worker,
+        ):
+            run_task = asyncio.create_task(run_game.callback(interaction))
+            try:
+                await asyncio.wait_for(witness(), timeout=1)
+                self.assertTrue(witness_completed.is_set())
+                self.assertFalse(run_task.done())
+            finally:
+                release_worker.set()
+            await asyncio.wait_for(run_task, timeout=1)
+
+        interaction.followup.send.assert_awaited_once_with("done", ephemeral=False)
 
     async def test_run_game_not_found_edits_deferred_response(self) -> None:
         interaction = make_interaction()
