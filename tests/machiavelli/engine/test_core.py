@@ -346,6 +346,7 @@ class TestGameEngineRunCampaign(unittest.TestCase):
             patch("machiavelli.engine.core.BribeResolver"),
             patch("machiavelli.engine.core.AssassinationResolver") as assassinations,
             patch("machiavelli.engine.core.MilitaryResolver"),
+            patch("machiavelli.engine.core.RetreatHandler"),
             patch("machiavelli.engine.core.ControlManager"),
         ):
             self.engine.run_campaign()
@@ -367,6 +368,7 @@ class TestGameEngineRunCampaign(unittest.TestCase):
             patch("machiavelli.engine.core.BribeResolver"),
             patch("machiavelli.engine.core.AssassinationResolver"),
             patch("machiavelli.engine.core.MilitaryResolver"),
+            patch("machiavelli.engine.core.RetreatHandler"),
             patch("machiavelli.engine.core.ControlManager"),
             patch("machiavelli.engine.core.IncomeManager"),
         ):

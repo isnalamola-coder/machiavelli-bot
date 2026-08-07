@@ -3,8 +3,6 @@
 
 from ..events import EventType, TurnEvent
 from ..game.game import Game, Player
-from ..game.map import Map
-from ..game.scenario import Scenario
 
 
 class ControlManager:
@@ -13,28 +11,13 @@ class ControlManager:
     def __init__(self, game: Game):
         self.game = game
 
-    def _map(self) -> Map:
-        """Devuelve el mapa activo conservando la interfaz histórica de Game."""
-        game_map = self.game.map
-        if game_map is None:
-            raise RuntimeError("La partida requiere un mapa cargado")
-        return game_map
-
-    def _scenario(self) -> Scenario:
-        """Devuelve el escenario activo conservando la interfaz histórica de Game."""
-        scenario = self.game.scenario
-        if scenario is None:
-            raise RuntimeError("La partida requiere un escenario cargado")
-        return scenario
-
     def _provinces_with_own_units(self, player: Player) -> set[str]:
         """Devuelve un set con las provincias en las que hay unidades de player."""
-        own_provinces: set[str] = set()
-        game_map = self._map()
+        own_provinces = set()
 
-        own_provinces.update(player.armies)
+        own_provinces.update(p for p in player.armies)
         own_provinces.update(
-            fleet.split()[0] for fleet in player.fleets if fleet in game_map.provinces
+            p.split()[0] for p in player.fleets if p in self.game.map.provinces
         )
         own_provinces.update(p for p in player.garrisons)
 
@@ -42,8 +25,7 @@ class ControlManager:
 
     def _provinces_with_others_units(self, player: Player) -> set[str]:
         """Devuelve un set con las provincias con unidades de otro jugador."""
-        others_provinces: set[str] = set()
-        game_map = self._map()
+        others_provinces = set()
 
         others_provinces.update(
             p for other in self.game.players for p in other.armies if other != player
@@ -53,7 +35,7 @@ class ControlManager:
             for other in self.game.players
             for p in other.fleets
             if other != player
-            if p in game_map.provinces
+            if p in self.game.map.provinces
         )
         others_provinces.update(
             p for other in self.game.players for p in other.garrisons if other != player
@@ -68,12 +50,12 @@ class ControlManager:
         own_provinces = self._provinces_with_own_units(player)
         others_provinces = self._provinces_with_others_units(player)
 
-        new_controlled_provinces = sorted(
+        new_controlled_provinces = [
             p
             for p in own_provinces
             if p not in others_provinces
             if p not in player.controlled_locations
-        )
+        ]
         lost_controlled_provinces = [
             p for p in player.controlled_locations if p in others_provinces
         ]
@@ -111,14 +93,12 @@ class ControlManager:
 
         # Se pierde el control de un país natal si se pierde el control de todas las
         # ciudades de éste. Una guarnición no basta para controlar una ciudad
-        scenario = self._scenario()
-        game_map = self._map()
         for home_country in player.home_countries[:]:
-            target_hc = scenario.home_countries.get(home_country)
+            target_hc = self.game.scenario.home_countries.get(home_country)
             if target_hc:
                 controls_any_city = any(
                     p in player.controlled_locations
-                    and game_map.provinces[p].city in {"city", "fortified"}
+                    and self.game.map.provinces[p].city in ("city", "fortified")
                     for p in target_hc.provinces
                 )
             else:
@@ -136,12 +116,11 @@ class ControlManager:
     def home_country_control_gains(self, player: Player) -> None:
         # Se gana el control de un país natal si se controlan
         # todas las provincias y ciudades de éste
-        scenario = self._scenario()
-        for home_country in scenario.home_countries:
+        for home_country in self.game.scenario.home_countries:
             if home_country not in player.home_countries:
                 missing_province = any(
                     p not in player.controlled_locations
-                    for p in scenario.home_countries[home_country].provinces
+                    for p in self.game.scenario.home_countries[home_country].provinces
                 )
                 if not missing_province:
                     self.game.add_event(
@@ -164,14 +143,12 @@ class ControlManager:
                 )
             )
         else:
-            game_map = self._map()
-            scenario = self._scenario()
             cities = sum(
-                game_map.provinces[p].city in {"city", "fortified"}
+                self.game.map.provinces[p].city in ("city", "fortified")
                 for p in player.controlled_locations
             )
             hc = len(player.home_countries)
-            victory_conditions = scenario.victory_conditions
+            victory_conditions = self.game.scenario.victory_conditions
             if (
                 cities >= victory_conditions.cities
                 and hc >= victory_conditions.home_countries
@@ -198,7 +175,7 @@ class ControlManager:
             self.check_player_status(player)
 
         # Y cambiamos de estación
-        year = self._scenario().year + self.game.turn_number // 4
+        year = self.game.scenario.year + self.game.turn_number // 4
         season = self.game.turn_number % 4
 
         self.game.add_event(

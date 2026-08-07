@@ -144,6 +144,16 @@ def test_exp_available_expenses(service, mock_game):
 
 def test_exp_available_amounts_fixed_cost(service):
     service.player.ducats = 20
+    service.game.famine = ["naple"]
+    service.game.map.provinces = {
+        "naple": MagicMock(
+            id="naple",
+            name="Naples",
+            land_routes=[],
+            sea_routes=[],
+        ),
+    }
+    service.game.map.seas = {}
 
     with pytest.MonkeyPatch.context() as mp:
         from machiavelli.services import player_interaction_service
@@ -155,3 +165,139 @@ def test_exp_available_amounts_fixed_cost(service):
         choices = service.exp_available_amounts("E A", "naple")
         assert ("0", "Cancelar gasto") in choices
         assert ("5", "5 ducados") in choices
+
+
+def test_inactive_rules_hide_famine_and_assassination_expenses(service, mock_game):
+    service.player.ass_counters = ["M"]
+    mock_game.players = [
+        service.player,
+        MagicMock(power="M", home_countries=["M"], armies=[], fleets=[], garrisons=[]),
+    ]
+    mock_game.famine = ["naple"]
+    mock_game.scenario.rules.famine_active = False
+    mock_game.scenario.rules.assassinations_active = False
+    mock_game.map.provinces = {
+        "naple": MagicMock(land_routes=[], sea_routes=[]),
+    }
+    mock_game.map.seas = {}
+
+    with pytest.MonkeyPatch.context() as mp:
+        from machiavelli.services import player_interaction_service
+
+        mock_gt = MagicMock()
+        mock_gt.expenses = {
+            "A": {"cost": 5, "text": "Paliar hambruna"},
+            "E": {"cost": 5, "text": "Asesinar"},
+            "F": {"cost": 2, "text": "Contra-soborno"},
+        }
+        mp.setattr(player_interaction_service, "GameTables", mock_gt)
+
+        choices = service.exp_available_expenses()
+        famine_targets = service.exp_available_targets("E A")
+        assassination_targets = service.exp_available_targets("E E")
+        famine_amounts = service.exp_available_amounts("E A", "naple")
+        assassination_amounts = service.exp_available_amounts("E E", "M")
+
+    assert ("E A", "Paliar hambruna") not in choices
+    assert ("E E", "Asesinar") not in choices
+    assert ("E F", "Contra-soborno") in choices
+    assert famine_targets == []
+    assert assassination_targets == []
+    assert famine_amounts == []
+    assert assassination_amounts == []
+
+
+def test_inactive_fortress_hides_garrison_convert_and_besiege(service, mock_game):
+    mock_game.turn_number = 2
+    service.player.armies = ["keep"]
+    service.player.garrisons = ["keep"]
+    mock_game.independent_garrisons = ["keep"]
+    province = MagicMock(
+        name="Keep",
+        city="fortress",
+        has_port=True,
+        land_routes=[],
+        sea_routes=[],
+    )
+    mock_game.map.provinces = {"keep": province}
+    mock_game.map.seas = {}
+    mock_game.scenario.is_defensible_city.return_value = False
+
+    with pytest.MonkeyPatch.context() as mp:
+        from machiavelli.services import player_interaction_service
+
+        mock_gt = MagicMock()
+        mock_gt.military_orders = {
+            "A": {"text": "Avanzar"},
+            "B": {"text": "Asediar"},
+            "H": {"text": "Mantener"},
+            "S": {"text": "Apoyar"},
+            "C": {"text": "Convertir"},
+        }
+        mp.setattr(player_interaction_service, "GameTables", mock_gt)
+
+        actors = service.cmd_available_actors()
+        commands = dict(service.cmd_available_commands("A keep"))
+        hidden_garrison_commands = service.cmd_available_commands("G keep")
+        hidden_convert_targets = service.cmd_available_targets("A keep", "C")
+
+    assert ("G keep", "Guarnición en Keep") not in actors
+    assert "B" not in commands
+    assert "C" not in commands
+    assert hidden_garrison_commands == []
+    assert hidden_convert_targets == []
+
+
+def test_active_fortress_shows_existing_defensible_actions(service, mock_game):
+    mock_game.turn_number = 2
+    service.player.armies = ["keep"]
+    service.player.garrisons = ["keep"]
+    mock_game.independent_garrisons = ["keep"]
+    province = MagicMock(
+        city="fortress",
+        has_port=True,
+        land_routes=[],
+        sea_routes=[],
+    )
+    province.name = "Keep"
+    mock_game.map.provinces = {"keep": province}
+    mock_game.map.seas = {}
+    mock_game.scenario.is_defensible_city.return_value = True
+
+    with pytest.MonkeyPatch.context() as mp:
+        from machiavelli.services import player_interaction_service
+
+        mock_gt = MagicMock()
+        mock_gt.military_orders = {
+            "A": {"text": "Avanzar"},
+            "B": {"text": "Asediar"},
+            "H": {"text": "Mantener"},
+            "S": {"text": "Apoyar"},
+            "C": {"text": "Convertir"},
+        }
+        mp.setattr(player_interaction_service, "GameTables", mock_gt)
+
+        actors = service.cmd_available_actors()
+        commands = dict(service.cmd_available_commands("A keep"))
+
+    assert ("G keep", "Guarnición en Keep") in actors
+    assert "B" in commands
+    assert "C" in commands
+
+
+def test_fortress_is_not_offered_for_recruitment(service, mock_game):
+    mock_game.turn_number = 1
+    service.player.armies = []
+    service.player.fleets = []
+    service.player.garrisons = []
+    service.player.home_countries = ["M"]
+    service.player.controlled_locations = ["keep"]
+    mock_game.scenario.home_countries = {
+        "M": MagicMock(provinces=["keep"]),
+    }
+    mock_game.map.provinces = {
+        "keep": MagicMock(name="Keep", city="fortress", has_port=True),
+    }
+    mock_game.map.seas = {}
+
+    assert service.cmd_available_actors() == []

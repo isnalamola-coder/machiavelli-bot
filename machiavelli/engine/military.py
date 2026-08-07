@@ -216,16 +216,15 @@ class MilitaryResolver:
         elif key.unit_type == "F":
             self.fleet_by_conflict_location[location] = key
 
-    def _defensible_city_types(self) -> frozenset[str]:
-        """Devuelve las ciudades defendibles habilitadas por el escenario."""
+    def _is_defensible_city(self, city: str | None) -> bool:
+        """Comprueba si una ciudad admite defensa con el escenario activo."""
         scenario = self.game.scenario
-        if scenario is not None and not scenario.rules.fortress_active:
-            return frozenset({"fortified"})
-        return frozenset({"fortified", "fortress"})
+        if scenario is None:
+            return city in {"fortified", "fortress"}
+        return scenario.is_defensible_city(city)
 
     def _build_rebellion_index(self) -> None:
         """Indexa cada rebelión una sola vez sin convertirla en participante."""
-        defensible_cities = self._defensible_city_types()
         for player in sorted(self.game.players, key=lambda item: item.player_id):
             for kind, locations in (
                 ("province", player.rebelled_provinces),
@@ -237,7 +236,7 @@ class MilitaryResolver:
                         raise InvalidMilitaryState(
                             f"Localización de rebelión inválida: {location}"
                         )
-                    if kind == "city" and province.city not in defensible_cities:
+                    if kind == "city" and not self._is_defensible_city(province.city):
                         raise InvalidMilitaryState(
                             f"Rebelión urbana fuera de ciudad defendible: {location}"
                         )
@@ -439,20 +438,11 @@ class MilitaryResolver:
                 rebellion is not None and rebellion[1] == "city"
             ):
                 return "conversión bloqueada por asedio o rebelión urbana"
-            valid = (
+            valid = self._is_defensible_city(location.city) and (
                 (key.unit_type == "G" and target == "A")
                 or (key.unit_type == "G" and target == "F" and location.has_port)
-                or (
-                    key.unit_type == "A"
-                    and target == "G"
-                    and location.city == "fortified"
-                )
-                or (
-                    key.unit_type == "F"
-                    and target == "G"
-                    and location.city == "fortified"
-                    and location.has_port
-                )
+                or (key.unit_type == "A" and target == "G")
+                or (key.unit_type == "F" and target == "G" and location.has_port)
             )
             if not valid:
                 return "conversión inválida"
@@ -475,7 +465,7 @@ class MilitaryResolver:
             key.unit_type not in {"A", "F"}
             or target != province
             or location is None
-            or location.city not in self._defensible_city_types()
+            or not self._is_defensible_city(location.city)
         ):
             return "objetivo de asedio inválido"
         if key.unit_type == "F" and not location.has_port:
@@ -530,7 +520,10 @@ class MilitaryResolver:
         """Valida el origen según las restricciones del tipo de unidad."""
         if key.unit_type == "F":
             return self._location_exists(key.origin)
-        return key.origin in self.map.provinces
+        province = self.map.provinces.get(key.origin)
+        if key.unit_type == "G":
+            return province is not None and self._is_defensible_city(province.city)
+        return province is not None
 
     def _conflicts(self) -> dict[str, list[UnitKey]]:
         """Proyecta cada orden sobre la plaza donde puede generar conflicto."""
@@ -1501,7 +1494,18 @@ class MilitaryResolver:
         besieges: list[str],
     ) -> None:
         """Valida la coherencia conjunta de rebeliones, guarniciones y asedios."""
-        defensible_cities = self._defensible_city_types()
+        garrison_locations = [
+            location
+            for collections in player_collections.values()
+            for location in collections["G"]
+        ] + independent
+        for location in garrison_locations:
+            province = self.map.provinces.get(location)
+            if province is None or not self._is_defensible_city(province.city):
+                raise MilitaryResolutionError(
+                    "Estado final de guarnición fuera de ciudad defendible"
+                )
+
         rebellion_locations: set[str] = set()
         city_rebellions: dict[str, str] = {}
         for owner_id, collections in rebellions.items():
@@ -1513,7 +1517,7 @@ class MilitaryResolver:
                             "Estado final de rebelión inválido"
                         )
                     if kind == "city":
-                        if province.city not in defensible_cities:
+                        if not self._is_defensible_city(province.city):
                             raise MilitaryResolutionError(
                                 "Rebelión urbana final fuera de ciudad defendible"
                             )
@@ -1533,7 +1537,7 @@ class MilitaryResolver:
             raise MilitaryResolutionError("Estado final de asedios duplicado")
         for location in besieges:
             province = self.map.provinces.get(location)
-            if province is None or province.city not in defensible_cities:
+            if province is None or not self._is_defensible_city(province.city):
                 raise MilitaryResolutionError("Estado final de asedio inválido")
             besiegers = [
                 (player_id, unit_type)

@@ -103,7 +103,7 @@ class GameEngine:
         if assassinations_active:
             AssassinationResolver(self.game).run()
         # Un fallo militar interrumpe la campaña antes de hambre, control y plaga.
-        MilitaryResolver(self.game).run()
+        MilitaryResolver(self.game).run(dislodgement_resolver=RetreatHandler(self.game))
         if season == 2 and famine_active and disaster_manager is not None:
             disaster_manager.resolve_famine_attrition()
         ControlManager(self.game).run()

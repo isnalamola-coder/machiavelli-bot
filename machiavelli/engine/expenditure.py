@@ -17,7 +17,14 @@ class ExpenditureProcessor:
     def _process_player_expenses(self, player: Player) -> list[Command]:
         """Procesa los gastos del jugador."""
         funded_commands = []
+        rules = self.game.scenario.rules if self.game.scenario is not None else None
         for cmd in player.commands:
+            if rules is not None and (
+                (cmd.actor == "E A" and not rules.famine_active)
+                or (cmd.actor == "E E" and not rules.assassinations_active)
+            ):
+                continue
+
             # Si no es una orden de gasto se conserva intacta silenciosamente
             if not cmd.is_valid_expense():
                 funded_commands.append(cmd)

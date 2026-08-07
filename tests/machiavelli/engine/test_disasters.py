@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from machiavelli.engine.disasters import DisastersManager
 from machiavelli.events import EventType, TurnEvent
 from machiavelli.game.command import Command
+from machiavelli.game.scenario import Rules
 from tests.machiavelli.engine.helpers import create_mock_game
 
 
@@ -411,3 +412,33 @@ class TestSpawnPlague(unittest.TestCase):
             mock_apply_deaths.assert_called_once_with(
                 event_type=EventType.PLAGUE_DEATH, provinces=plague_provinces
             )
+
+
+class TestInactiveDisasterRules(unittest.TestCase):
+    def setUp(self):
+        self.game = Mock()
+        self.game.scenario.rules = Rules(famine_active=False, plague_active=False)
+        self.game.famine = ["pisa"]
+        self.game.players = []
+        self.game.independent_garrisons = ["pisa"]
+        self.manager = DisastersManager(self.game)
+
+    @patch("machiavelli.engine.disasters.GameTables")
+    def test_inactive_rules_make_all_public_disaster_methods_no_ops(self, mock_tables):
+        mock_tables.expenses = {"A": {"cost": 3}}
+
+        with (
+            patch.object(self.manager, "_spawn_disaster") as spawn,
+            patch.object(self.manager, "_apply_disaster_deaths") as deaths,
+        ):
+            self.manager.process_famine_relief_expenses()
+            self.manager.resolve_famine_attrition()
+            self.manager.clear_famine()
+            self.manager.spawn_famine()
+            self.manager.spawn_plague()
+
+        self.assertEqual(self.game.famine, ["pisa"])
+        self.assertEqual(self.game.independent_garrisons, ["pisa"])
+        self.game.add_event.assert_not_called()
+        spawn.assert_not_called()
+        deaths.assert_not_called()
