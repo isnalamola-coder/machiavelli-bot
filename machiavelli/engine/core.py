@@ -8,6 +8,7 @@ from .assassination import AssassinationResolver
 from .bribes import BribeResolver
 from .control import ControlManager
 from .disasters import DisastersManager
+from .dislodgement import RetreatHandler
 from .expenditure import ExpenditureProcessor
 from .income import IncomeManager
 from .maintenance import MaintenanceResolver

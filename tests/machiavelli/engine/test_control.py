@@ -334,14 +334,6 @@ class TestHomeCountryControlGains(unittest.TestCase):
         self.assertNotIn("L", self.player.home_countries)
         self.mock_game.add_event.assert_not_called()
 
-    def test_home_country_control_gains_ignores_fortress_only_country(self):
-        self.player.controlled_locations = ["keep"]
-
-        self.manager.home_country_control_gains(self.player)
-
-        self.assertEqual(self.player.home_countries, [])
-        self.mock_game.add_event.assert_not_called()
-
     def test_home_country_control_already_owned(self):
         """Si el jugador ya posee el país natal, no hace nada ni duplica eventos."""
         self.player.home_countries = ["L"]

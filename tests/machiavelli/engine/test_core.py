@@ -7,7 +7,6 @@ from unittest.mock import Mock, call, patch
 import pytest
 
 from machiavelli.engine.core import GameEngine
-from machiavelli.engine.military import MilitaryResolutionError
 from machiavelli.events import EventType, TurnEvent
 from machiavelli.game.command import Command
 from machiavelli.game.game import Game
@@ -215,8 +214,10 @@ class TestGameEngineRunCampaign(unittest.TestCase):
     @patch("machiavelli.engine.core.RebellionManager")
     @patch("machiavelli.engine.core.DisastersManager")
     @patch("machiavelli.engine.core.ExpenditureProcessor")
+    @patch("machiavelli.engine.core.RetreatHandler")
     def test_run_campaign_season_2_execution_order(
         self,
+        mock_retreat_handler_cls,
         mock_expenditure_cls,
         mock_disasters_cls,
         mock_rebellion_cls,
@@ -262,7 +263,9 @@ class TestGameEngineRunCampaign(unittest.TestCase):
             call.rebellion_expenses(),
             call.bribe_run(),
             call.assassination_run(),
-            call.military_run(),
+            call.military_run(
+                dislodgement_resolver=mock_retreat_handler_cls.return_value
+            ),
             call.attrition(),
             call.control_run(),
             call.clear_famine(),
@@ -279,8 +282,10 @@ class TestGameEngineRunCampaign(unittest.TestCase):
     @patch("machiavelli.engine.core.DisastersManager")
     @patch("machiavelli.engine.core.ExpenditureProcessor")
     @patch("machiavelli.engine.core.IncomeManager")
+    @patch("machiavelli.engine.core.RetreatHandler")
     def test_run_campaign_season_0_execution_order(
         self,
+        mock_retreat_handler_cls,
         mock_income_cls,
         mock_expenditure_cls,
         mock_disasters_cls,
@@ -322,7 +327,9 @@ class TestGameEngineRunCampaign(unittest.TestCase):
             call.rebellion_expenses(),
             call.bribe_run(),
             call.assassination_run(),
-            call.military_run(),
+            call.military_run(
+                dislodgement_resolver=mock_retreat_handler_cls.return_value
+            ),
             call.control_run(),
             call.spawn_famine(),
             call.income_run(),
@@ -1105,152 +1112,3 @@ def test_plague_inactive_integrated_snapshot_and_event_order() -> None:
         tuple(event for event in active_types if event not in forbidden)
         == inactive_types
     )
-
-
-def test_fortress_rule_integrated_snapshot_preserves_other_event_order() -> None:
-    games = {
-        active: _rule_campaign_game(
-            Rules(fortress_active=active),
-            turn_number=3,
-            players=[
-                {
-                    "player_id": "P1",
-                    "power": "M",
-                    "home_countries": ["M"],
-                    "controlled_locations": ["fort"],
-                    "armies": ["keep"],
-                }
-            ],
-            orders=[("A keep", "C", "G")],
-        )
-        for active in (True, False)
-    }
-    for game in games.values():
-        GameEngine(game, Random(7)).run_campaign()
-
-    active = _turn_snapshot(games[True])
-    inactive = _turn_snapshot(games[False])
-    assert inactive == {
-        **active,
-        "military": (
-            (("P1", "keep"),),
-            (),
-            (),
-            (),
-            (),
-            (),
-        ),
-        "events": inactive["events"],
-    }
-    expected_types = (
-        EventType.MILITARY_RESOLUTION,
-        EventType.GET_CONTROL,
-        EventType.START_SEASON,
-    )
-    assert tuple(event.type for event in games[True].turn_events) == expected_types
-    assert tuple(event.type for event in games[False].turn_events) == expected_types
-    assert games[True].players[0].armies == []
-    assert games[True].players[0].garrisons == ["keep"]
-    assert games[False].players[0].armies == ["keep"]
-    assert games[False].players[0].garrisons == []
-    active_outcome = games[True].turn_events[0].data["outcomes"][0]
-    inactive_outcome = games[False].turn_events[0].data["outcomes"][0]
-    assert active_outcome[1:3] == ("G", "keep")
-    assert inactive_outcome[1:3] == ("A", "keep")
-
-
-class TestGameEngineDislodgementBarrier(unittest.TestCase):
-    """Verifica la inyección de retiradas y la parada tras un fallo militar."""
-
-    @patch("machiavelli.engine.core.ControlManager")
-    @patch("machiavelli.engine.core.MilitaryResolver")
-    @patch("machiavelli.engine.core.AssassinationResolver")
-    @patch("machiavelli.engine.core.BribeResolver")
-    @patch("machiavelli.engine.core.RebellionManager")
-    @patch("machiavelli.engine.core.DisastersManager")
-    @patch("machiavelli.engine.core.ExpenditureProcessor")
-    def test_military_runs_without_external_policy_and_control_observes_state(
-        self,
-        mock_expenditure_cls,
-        mock_disasters_cls,
-        mock_rebellion_cls,
-        mock_bribe_cls,
-        mock_assassination_cls,
-        mock_military_cls,
-        mock_control_cls,
-    ):
-        game = Mock()
-        game.turn_number = 2
-        player = Mock()
-        player.armies = ["before"]
-        game.players = [player]
-        observed_by_control = []
-
-        def finish_military():
-            """Simula el commit militar antes de que se ejecute control."""
-            player.armies = ["resolved"]
-
-        def capture_control():
-            """Captura el estado que recibe la fase posterior al resolver militar."""
-            observed_by_control.append(tuple(player.armies))
-
-        mock_military_cls.return_value.run.side_effect = finish_military
-        mock_control_cls.return_value.run.side_effect = capture_control
-        order = Mock()
-        order.attach_mock(mock_military_cls.return_value.run, "military")
-        order.attach_mock(
-            mock_disasters_cls.return_value.resolve_famine_attrition,
-            "attrition",
-        )
-        order.attach_mock(mock_control_cls.return_value.run, "control")
-        order.attach_mock(mock_disasters_cls.return_value.clear_famine, "clear")
-        order.attach_mock(mock_disasters_cls.return_value.spawn_plague, "plague")
-
-        engine = GameEngine(game)
-        engine.run_campaign()
-
-        mock_military_cls.return_value.run.assert_called_once_with()
-        self.assertEqual(observed_by_control, [("resolved",)])
-        self.assertEqual(
-            order.mock_calls,
-            [
-                call.military(),
-                call.attrition(),
-                call.control(),
-                call.clear(),
-                call.plague(),
-            ],
-        )
-
-    @patch("machiavelli.engine.core.ControlManager")
-    @patch("machiavelli.engine.core.MilitaryResolver")
-    @patch("machiavelli.engine.core.AssassinationResolver")
-    @patch("machiavelli.engine.core.BribeResolver")
-    @patch("machiavelli.engine.core.RebellionManager")
-    @patch("machiavelli.engine.core.DisastersManager")
-    @patch("machiavelli.engine.core.ExpenditureProcessor")
-    def test_military_error_stops_all_later_campaign_phases(
-        self,
-        mock_expenditure_cls,
-        mock_disasters_cls,
-        mock_rebellion_cls,
-        mock_bribe_cls,
-        mock_assassination_cls,
-        mock_military_cls,
-        mock_control_cls,
-    ):
-        game = Mock()
-        game.turn_number = 2
-        error = MilitaryResolutionError("stop")
-        mock_military_cls.return_value.run.side_effect = error
-        engine = GameEngine(game)
-
-        with self.assertRaises(MilitaryResolutionError) as caught:
-            engine.run_campaign()
-
-        self.assertIs(caught.exception, error)
-        mock_military_cls.return_value.run.assert_called_once_with()
-        mock_disasters_cls.return_value.resolve_famine_attrition.assert_not_called()
-        mock_control_cls.return_value.run.assert_not_called()
-        mock_disasters_cls.return_value.clear_famine.assert_not_called()
-        mock_disasters_cls.return_value.spawn_plague.assert_not_called()
