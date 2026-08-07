@@ -8,7 +8,6 @@ from .assassination import AssassinationResolver
 from .bribes import BribeResolver
 from .control import ControlManager
 from .disasters import DisastersManager
-from .dislodgement import RetreatHandler
 from .expenditure import ExpenditureProcessor
 from .income import IncomeManager
 from .maintenance import MaintenanceResolver
@@ -25,7 +24,7 @@ class GameEngine:
         game: Game,
         rng: Random | None = None,
     ):
-        """Configura el motor y el gestor opcional de retiradas militares."""
+        """Configura el motor y la fuente opcional de aleatoriedad."""
         self.game = game
         self.rng = rng if rng is not None else Random()
 

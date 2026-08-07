@@ -215,10 +215,8 @@ class TestGameEngineRunCampaign(unittest.TestCase):
     @patch("machiavelli.engine.core.RebellionManager")
     @patch("machiavelli.engine.core.DisastersManager")
     @patch("machiavelli.engine.core.ExpenditureProcessor")
-    @patch("machiavelli.engine.core.RetreatHandler")
     def test_run_campaign_season_2_execution_order(
         self,
-        mock_retreat_handler_cls,
         mock_expenditure_cls,
         mock_disasters_cls,
         mock_rebellion_cls,
@@ -229,7 +227,6 @@ class TestGameEngineRunCampaign(unittest.TestCase):
     ):
         """Verifica el orden secuencial exacto de ejecución durante en season == 2."""
         self.mock_game.turn_number = 2
-        mock_retreat_instance = mock_retreat_handler_cls.return_value
 
         # Rastreador centralizado de orden de llamadas
         manager = Mock()
@@ -265,7 +262,7 @@ class TestGameEngineRunCampaign(unittest.TestCase):
             call.rebellion_expenses(),
             call.bribe_run(),
             call.assassination_run(),
-            call.military_run(dislodgement_resolver=mock_retreat_instance),
+            call.military_run(),
             call.attrition(),
             call.control_run(),
             call.clear_famine(),
@@ -282,10 +279,8 @@ class TestGameEngineRunCampaign(unittest.TestCase):
     @patch("machiavelli.engine.core.DisastersManager")
     @patch("machiavelli.engine.core.ExpenditureProcessor")
     @patch("machiavelli.engine.core.IncomeManager")
-    @patch("machiavelli.engine.core.RetreatHandler")
     def test_run_campaign_season_0_execution_order(
         self,
-        mock_retreat_handler_cls,
         mock_income_cls,
         mock_expenditure_cls,
         mock_disasters_cls,
@@ -297,7 +292,6 @@ class TestGameEngineRunCampaign(unittest.TestCase):
     ):
         """Verifica el orden secuencial exacto de ejecución durante en season == 0."""
         self.mock_game.turn_number = 4
-        mock_retreat_instance = mock_retreat_handler_cls.return_value
 
         # Rastreador centralizado de orden de llamadas
         manager = Mock()
@@ -328,7 +322,7 @@ class TestGameEngineRunCampaign(unittest.TestCase):
             call.rebellion_expenses(),
             call.bribe_run(),
             call.assassination_run(),
-            call.military_run(dislodgement_resolver=mock_retreat_instance),
+            call.military_run(),
             call.control_run(),
             call.spawn_famine(),
             call.income_run(),
@@ -1175,10 +1169,8 @@ class TestGameEngineDislodgementBarrier(unittest.TestCase):
     @patch("machiavelli.engine.core.RebellionManager")
     @patch("machiavelli.engine.core.DisastersManager")
     @patch("machiavelli.engine.core.ExpenditureProcessor")
-    @patch("machiavelli.engine.core.RetreatHandler")
-    def test_manager_is_forwarded_and_control_observes_consolidated_state(
+    def test_military_runs_without_external_policy_and_control_observes_state(
         self,
-        mock_retreat_handler_cls,
         mock_expenditure_cls,
         mock_disasters_cls,
         mock_rebellion_cls,
@@ -1192,12 +1184,10 @@ class TestGameEngineDislodgementBarrier(unittest.TestCase):
         player = Mock()
         player.armies = ["before"]
         game.players = [player]
-        mock_retreat_instance = mock_retreat_handler_cls.return_value
         observed_by_control = []
 
-        def finish_military(*, dislodgement_resolver):
+        def finish_military():
             """Simula el commit militar antes de que se ejecute control."""
-            self.assertIs(dislodgement_resolver, mock_retreat_instance)
             player.armies = ["resolved"]
 
         def capture_control():
@@ -1219,14 +1209,12 @@ class TestGameEngineDislodgementBarrier(unittest.TestCase):
         engine = GameEngine(game)
         engine.run_campaign()
 
-        mock_military_cls.return_value.run.assert_called_once_with(
-            dislodgement_resolver=mock_retreat_instance
-        )
+        mock_military_cls.return_value.run.assert_called_once_with()
         self.assertEqual(observed_by_control, [("resolved",)])
         self.assertEqual(
             order.mock_calls,
             [
-                call.military(dislodgement_resolver=mock_retreat_instance),
+                call.military(),
                 call.attrition(),
                 call.control(),
                 call.clear(),
@@ -1241,10 +1229,8 @@ class TestGameEngineDislodgementBarrier(unittest.TestCase):
     @patch("machiavelli.engine.core.RebellionManager")
     @patch("machiavelli.engine.core.DisastersManager")
     @patch("machiavelli.engine.core.ExpenditureProcessor")
-    @patch("machiavelli.engine.core.RetreatHandler")
     def test_military_error_stops_all_later_campaign_phases(
         self,
-        mock_retreat_handler_cls,
         mock_expenditure_cls,
         mock_disasters_cls,
         mock_rebellion_cls,
@@ -1255,7 +1241,6 @@ class TestGameEngineDislodgementBarrier(unittest.TestCase):
     ):
         game = Mock()
         game.turn_number = 2
-        mock_retreat_instance = mock_retreat_handler_cls.return_value
         error = MilitaryResolutionError("stop")
         mock_military_cls.return_value.run.side_effect = error
         engine = GameEngine(game)
@@ -1264,9 +1249,7 @@ class TestGameEngineDislodgementBarrier(unittest.TestCase):
             engine.run_campaign()
 
         self.assertIs(caught.exception, error)
-        mock_military_cls.return_value.run.assert_called_once_with(
-            dislodgement_resolver=mock_retreat_instance
-        )
+        mock_military_cls.return_value.run.assert_called_once_with()
         mock_disasters_cls.return_value.resolve_famine_attrition.assert_not_called()
         mock_control_cls.return_value.run.assert_not_called()
         mock_disasters_cls.return_value.clear_famine.assert_not_called()
