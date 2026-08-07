@@ -16,6 +16,13 @@ class PlayerInteractionService:
         self.player = player
         self.game = player.game
 
+    def _fortress_action_enabled(self, location: str) -> bool:
+        province = self.game.map.provinces.get(location.split()[0])
+        if province is None or province.city != "fortress":
+            return True
+        scenario = self.game.scenario
+        return scenario is None or scenario.is_defensible_city(province.city)
+
     # ---------------------------------------------------------
     # Funciones para la precarga de órdenes disponibles
     # ---------------------------------------------------------
@@ -35,7 +42,8 @@ class PlayerInteractionService:
             for a in self.player.fleets:
                 choices.append((f"F {a}", f"Flota en {locations[a].name}"))
             for a in self.player.garrisons:
-                choices.append((f"G {a}", f"Guarnición en {provinces[a].name}"))
+                if self._fortress_action_enabled(a):
+                    choices.append((f"G {a}", f"Guarnición en {provinces[a].name}"))
 
             home_countries_cities = [
                 p
@@ -73,7 +81,8 @@ class PlayerInteractionService:
             for a in self.player.fleets:
                 choices.append((f"F {a}", f"Flota en {locations[a].name}"))
             for a in self.player.garrisons:
-                choices.append((f"G {a}", f"Guarnición en {provinces[a].name}"))
+                if self._fortress_action_enabled(a):
+                    choices.append((f"G {a}", f"Guarnición en {provinces[a].name}"))
 
             unit_provinces = {p for p in self.player.armies}
             unit_provinces |= {p.split()[0] for p in self.player.fleets}
@@ -107,10 +116,14 @@ class PlayerInteractionService:
                 g
                 for p in self.game.players
                 for g in p.garrisons
-                if p != self.player and g in adjacent
+                if p != self.player
+                and g in adjacent
+                and self._fortress_action_enabled(g)
             ]
             bribe_independent = [
-                g for g in self.game.independent_garrisons if g in adjacent
+                g
+                for g in self.game.independent_garrisons
+                if g in adjacent and self._fortress_action_enabled(g)
             ]
 
             for a in bribe_armies:
@@ -152,12 +165,18 @@ class PlayerInteractionService:
             has_garrison = actor_id in garrisons
             province = self.game.map.provinces.get(actor_location)
             has_port = province.has_port if province else False
+            fortress_action_enabled = self._fortress_action_enabled(actor_id)
 
             if actor_type in ("A", "F") and not is_besieging:
                 choices.append(("A", f"{GameTables.military_orders['A']['text']}"))
-            if actor_type == "A" and has_garrison:
+            if actor_type == "A" and has_garrison and fortress_action_enabled:
                 choices.append(("B", f"{GameTables.military_orders['B']['text']}"))
-            if actor_type == "F" and has_garrison and has_port:
+            if (
+                actor_type == "F"
+                and has_garrison
+                and has_port
+                and fortress_action_enabled
+            ):
                 choices.append(("B", f"{GameTables.military_orders['B']['text']}"))
             choices.append(("H", f"{GameTables.military_orders['H']['text']}"))
             if actor_type in ("A", "F") and is_besieging:
@@ -165,7 +184,8 @@ class PlayerInteractionService:
             choices.append(("S", f"{GameTables.military_orders['S']['text']}"))
             if actor_type == "F":
                 choices.append(("T", f"{GameTables.military_orders['T']['text']}"))
-            choices.append(("C", f"{GameTables.military_orders['C']['text']}"))
+            if fortress_action_enabled:
+                choices.append(("C", f"{GameTables.military_orders['C']['text']}"))
 
         return choices
 
@@ -282,8 +302,16 @@ class PlayerInteractionService:
                 for a in armies:
                     choices.append((f"A {a}", f"Ejército en {locations[a].name}"))
             elif command == "C":
+                if not self._fortress_action_enabled(actor_id):
+                    return []
                 choices.append(("0", "Desbandar"))
-                if locations[actor_id].city == "fortified":
+                scenario = self.game.scenario
+                is_defensible = (
+                    scenario.is_defensible_city(locations[actor_id].city)
+                    if scenario is not None
+                    else locations[actor_id].city == "fortified"
+                )
+                if is_defensible:
                     if actor_type == "G":
                         choices.append(("A", f"{GameTables.actors['A']}"))
                         if locations[actor_id].has_port:
@@ -301,10 +329,18 @@ class PlayerInteractionService:
         """Devuelve la lista de gastos disponibles para un jugador."""
         choices = []
 
+        scenario = self.game.scenario
         expenses = {
             k: e
             for k, e in GameTables.expenses.items()
             if e["cost"] <= self.player.ducats
+            and not (
+                scenario is not None
+                and (
+                    (k == "A" and not scenario.rules.famine_active)
+                    or (k == "E" and not scenario.rules.assassinations_active)
+                )
+            )
         }
 
         locations = self.game.map.provinces | self.game.map.seas
@@ -340,7 +376,7 @@ class PlayerInteractionService:
             g
             for p in self.game.players
             for g in p.garrisons
-            if p != self.player and g in adjacent
+            if p != self.player and g in adjacent and self._fortress_action_enabled(g)
         ]
 
         for key, expense in expenses.items():
@@ -348,9 +384,12 @@ class PlayerInteractionService:
                 choices.append((f"E {key}", f"{expense['text']}"))
             elif key == "B":
                 rebellions = [
+                    r for p in self.game.players for r in p.rebelled_provinces
+                ] + [
                     r
                     for p in self.game.players
-                    for r in (p.rebelled_provinces + p.rebelled_cities)
+                    for r in p.rebelled_cities
+                    if self._fortress_action_enabled(r)
                 ]
                 if rebellions:
                     choices.append((f"E {key}", f"{expense['text']}"))
@@ -389,7 +428,9 @@ class PlayerInteractionService:
                 choices.append((f"E {key}", f"{expense['text']}"))
             elif key in ("G", "H"):
                 garrisons = [
-                    g for g in self.game.independent_garrisons if g in adjacent
+                    g
+                    for g in self.game.independent_garrisons
+                    if g in adjacent and self._fortress_action_enabled(g)
                 ]
                 if garrisons:
                     choices.append((f"E {key}", f"{expense['text']}"))
@@ -410,6 +451,12 @@ class PlayerInteractionService:
         choices = []
 
         _, key = expense.split()
+        scenario = self.game.scenario
+        if scenario is not None and (
+            (key == "A" and not scenario.rules.famine_active)
+            or (key == "E" and not scenario.rules.assassinations_active)
+        ):
+            return []
         map = self.game.map
 
         locations = self.game.map.provinces | self.game.map.seas
@@ -445,7 +492,7 @@ class PlayerInteractionService:
             g
             for p in self.game.players
             for g in p.garrisons
-            if p != self.player and g in adjacent
+            if p != self.player and g in adjacent and self._fortress_action_enabled(g)
         ]
 
         if key == "A":
@@ -453,9 +500,12 @@ class PlayerInteractionService:
                 choices.append((f"{map.provinces[f].id}", f"{map.provinces[f].name}"))
         elif key == "B":
             rebellions = [
+                r for p in self.game.players for r in p.rebelled_provinces
+            ] + [
                 r
                 for p in self.game.players
-                for r in (p.rebelled_provinces + p.rebelled_cities)
+                for r in p.rebelled_cities
+                if self._fortress_action_enabled(r)
             ]
             for r in rebellions:
                 choices.append((f"{map.provinces[r].id}", f"{map.provinces[r].name}"))
@@ -498,12 +548,23 @@ class PlayerInteractionService:
             for f in fleets:
                 choices.append((f"F {f}", f"Flota en {locations[f].name}"))
             garrisons = [
-                u for p in self.game.players for u in p.garrisons
-            ] + self.game.independent_garrisons
+                u
+                for p in self.game.players
+                for u in p.garrisons
+                if self._fortress_action_enabled(u)
+            ] + [
+                u
+                for u in self.game.independent_garrisons
+                if self._fortress_action_enabled(u)
+            ]
             for g in garrisons:
                 choices.append((f"G {g}", f"Guarnición en {locations[g].name}"))
         elif key in ("G", "H"):
-            garrisons = [g for g in self.game.independent_garrisons if g in adjacent]
+            garrisons = [
+                g
+                for g in self.game.independent_garrisons
+                if g in adjacent and self._fortress_action_enabled(g)
+            ]
             for g in garrisons:
                 choices.append((f"G {g}", f"Guarnición en {locations[g].name}"))
         elif key == "I":

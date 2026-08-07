@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from machiavelli.engine.disasters import DisastersManager
 from machiavelli.events import EventType, TurnEvent
 from machiavelli.game.command import Command
+from machiavelli.game.scenario import Rules
 from tests.machiavelli.engine.helpers import create_mock_game
 
 
@@ -363,6 +364,44 @@ class TestSpawnDisaster(unittest.TestCase):
         result = self.manager._spawn_disaster(EventType.FAMINE_SPAWN)
 
         self.assertEqual(result, ["pisa"])
+
+
+class TestRuleGuards(unittest.TestCase):
+    def test_famine_inactive_makes_every_public_famine_method_a_noop(self):
+        game = Mock()
+        game.scenario.rules = Rules(famine_active=False, first_turn_famine=True)
+        game.famine = ["pisa"]
+        game.players = []
+        manager = DisastersManager(game)
+
+        with (
+            patch.object(manager, "_spawn_disaster") as spawn,
+            patch.object(manager, "_apply_disaster_deaths") as deaths,
+        ):
+            manager.process_famine_relief_expenses()
+            manager.resolve_famine_attrition()
+            manager.clear_famine()
+            manager.spawn_famine()
+
+        self.assertEqual(game.famine, ["pisa"])
+        game.add_event.assert_not_called()
+        spawn.assert_not_called()
+        deaths.assert_not_called()
+
+    def test_plague_inactive_makes_spawn_and_deaths_a_noop(self):
+        game = Mock()
+        game.scenario.rules = Rules(plague_active=False)
+        manager = DisastersManager(game)
+
+        with (
+            patch.object(manager, "_spawn_disaster") as spawn,
+            patch.object(manager, "_apply_disaster_deaths") as deaths,
+        ):
+            manager.spawn_plague()
+
+        game.add_event.assert_not_called()
+        spawn.assert_not_called()
+        deaths.assert_not_called()
 
 
 class TestSpawnFamine(unittest.TestCase):

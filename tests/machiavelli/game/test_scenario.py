@@ -43,6 +43,38 @@ class TestScenario(unittest.TestCase):
         self.assertEqual(p.name, "")
         self.assertEqual(p.controlled_provinces, [])
 
+    def test_rules_default_to_all_features_active(self):
+        """Las cinco reglas conservan compatibilidad activa por defecto."""
+        rules = Rules()
+
+        self.assertTrue(rules.fortress_active)
+        self.assertTrue(rules.assassinations_active)
+        self.assertTrue(rules.famine_active)
+        self.assertTrue(rules.first_turn_famine)
+        self.assertTrue(rules.plague_active)
+
+    def test_defensible_city_helper_respects_fortress_rule(self):
+        """Fortified siempre es defendible y fortress depende de su regla."""
+        active = Scenario(
+            name="active",
+            year=1454,
+            victory_conditions=self.vc,
+            rules=Rules(fortress_active=True),
+        )
+        inactive = Scenario(
+            name="inactive",
+            year=1454,
+            victory_conditions=self.vc,
+            rules=Rules(fortress_active=False),
+        )
+
+        self.assertTrue(active.is_defensible_city("fortified"))
+        self.assertTrue(active.is_defensible_city("fortress"))
+        self.assertFalse(active.is_defensible_city("city"))
+        self.assertFalse(active.is_defensible_city(None))
+        self.assertTrue(inactive.is_defensible_city("fortified"))
+        self.assertFalse(inactive.is_defensible_city("fortress"))
+
     @patch.dict(
         "machiavelli.game.scenario.GameTables.powers",
         {"M": "Milan", "V": "Venice"},

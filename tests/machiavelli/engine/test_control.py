@@ -214,16 +214,18 @@ class TestHomeCountryControlLoses(unittest.TestCase):
         self.flore_prov = Mock(city="city")
         self.pisa_prov = Mock(city="fortified")
         self.rural_prov = Mock(city=None)
+        self.fortress_prov = Mock(city="fortress")
 
         self.mock_game.map.provinces = {
             "flore": self.flore_prov,
             "pisa": self.pisa_prov,
             "rural": self.rural_prov,
+            "keep": self.fortress_prov,
         }
 
         # Configuración del País Natal
         self.target_hc = Mock()
-        self.target_hc.provinces = ["flore", "pisa", "rural"]
+        self.target_hc.provinces = ["flore", "pisa", "rural", "keep"]
         self.mock_game.scenario.home_countries = {"L": self.target_hc}
 
         # Mock del jugador
@@ -249,6 +251,16 @@ class TestHomeCountryControlLoses(unittest.TestCase):
 
         self.assertIn("L", self.player.home_countries)
         self.mock_game.add_event.assert_not_called()
+
+    def test_home_country_control_loses_when_only_fortress_is_controlled(self):
+        """Una fortress no cuenta como ciudad para conservar el país natal."""
+        self.player.controlled_locations = ["keep"]
+
+        self.manager.home_country_control_loses(self.player)
+
+        self.assertNotIn("L", self.player.home_countries)
+        event = self.mock_game.add_event.call_args.args[0]
+        self.assertEqual(event.type, EventType.LOSE_HOME_COUNTRY)
 
     def test_home_country_control_loses_keeps_no_city(self):
         """Pierde el país natal si solo controla provincias sin ciudad."""
@@ -356,11 +368,13 @@ class TestCheckPlayerStatus(unittest.TestCase):
         self.flore_prov = Mock(city="city")
         self.pisa_prov = Mock(city="fortified")
         self.rural_prov = Mock(city=None)
+        self.fortress_prov = Mock(city="fortress")
 
         self.mock_game.map.provinces = {
             "flore": self.flore_prov,
             "pisa": self.pisa_prov,
             "rural": self.rural_prov,
+            "keep": self.fortress_prov,
         }
 
         # Condiciones de victoria del escenario (ej. 2 ciudades y 1 país natal)
@@ -401,6 +415,14 @@ class TestCheckPlayerStatus(unittest.TestCase):
                 "home_countries": 1,
             },
         )
+
+    def test_check_player_status_does_not_count_fortress_for_victory(self):
+        """Una fortress controlada no incrementa el contador de ciudades."""
+        self.player.controlled_locations = ["flore", "keep"]
+
+        self.manager.check_player_status(self.player)
+
+        self.mock_game.add_event.assert_not_called()
 
     def test_check_player_status_missing_cities(self):
         """No emite eventos si el jugador conserva su país natal pero no gana."""

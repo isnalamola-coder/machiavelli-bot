@@ -23,7 +23,7 @@ def _state(ducats: int = 20):
     player.game = game
     player.ducats = ducats
     player.home_countries = ["Italy"]
-    player.controlled_locations = ["rome", "flore", "venic"]
+    player.controlled_locations = ["rome", "flore", "venic", "keep"]
     player.armies = []
     player.fleets = []
     player.garrisons = []
@@ -32,13 +32,14 @@ def _state(ducats: int = 20):
     game.players = [player]
     scenario = MagicMock()
     scenario.province_home_country.side_effect = lambda province: (
-        "Italy" if province in {"rome", "flore", "venic"} else "Other"
+        "Italy" if province in {"rome", "flore", "venic", "keep"} else "Other"
     )
     game_map = MagicMock()
     game_map.provinces = {
         "rome": DummyProvince(city="city", has_port=False),
         "flore": DummyProvince(city="fortified"),
         "venic": DummyProvince(city="fortified", has_port=True, is_venice=True),
+        "keep": DummyProvince(city="fortress"),
     }
     game.require_scenario.return_value = scenario
     game.require_map.return_value = game_map
@@ -47,6 +48,19 @@ def _state(ducats: int = 20):
 
 def _events(game: MagicMock):
     return [call.args[0] for call in game.add_event.call_args_list]
+
+
+def test_recruitment_never_accepts_fortress() -> None:
+    game, player = _state()
+    player.commands = [Command(game, player, "G keep", "R", None)]
+
+    MaintenanceResolver(game).run()
+
+    event = _events(game)[0]
+    assert event.type is EventType.MAINTENANCE_ORDER_RESOLVED
+    assert event.data["result"] == "invalid_home_or_control"
+    assert player.garrisons == []
+    assert player.ducats == 20
 
 
 def test_set_default_commands_adds_missing_maintenance_orders() -> None:

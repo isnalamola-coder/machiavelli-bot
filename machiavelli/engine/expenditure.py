@@ -23,6 +23,14 @@ class ExpenditureProcessor:
                 funded_commands.append(cmd)
                 continue
 
+            expense_type = cmd.actor.split()[1]
+            scenario = self.game.scenario
+            if scenario is not None and (
+                (expense_type == "A" and not scenario.rules.famine_active)
+                or (expense_type == "E" and not scenario.rules.assassinations_active)
+            ):
+                continue
+
             # Validar el importe
             try:
                 cost = int(cmd.command)
@@ -31,7 +39,7 @@ class ExpenditureProcessor:
                         TurnEvent.expense(
                             EventType.EXPENSE_SYNTAX_ERROR,
                             actor=player.player_id,
-                            expense_type=cmd.actor.split()[1],
+                            expense_type=expense_type,
                             target=cmd.target,
                             amount=cmd.command,
                         ),
@@ -43,7 +51,7 @@ class ExpenditureProcessor:
                     TurnEvent.expense(
                         EventType.EXPENSE_SYNTAX_ERROR,
                         actor=player.player_id,
-                        expense_type=cmd.actor.split()[1],
+                        expense_type=expense_type,
                         target=cmd.target,
                         amount=cmd.command,
                     ),
@@ -60,7 +68,7 @@ class ExpenditureProcessor:
                     TurnEvent.expense(
                         EventType.EXPENSE,
                         actor=player.player_id,
-                        expense_type=cmd.actor.split()[1],
+                        expense_type=expense_type,
                         target=cmd.target,
                         amount=cmd.command,
                     ),
@@ -72,7 +80,7 @@ class ExpenditureProcessor:
                     TurnEvent.expense(
                         EventType.EXPENSE_NO_FUNDS,
                         actor=player.player_id,
-                        expense_type=cmd.actor.split()[1],
+                        expense_type=expense_type,
                         target=cmd.target,
                         amount=cmd.command,
                     ),

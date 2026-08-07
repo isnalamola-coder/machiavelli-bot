@@ -141,6 +141,12 @@ class Scenario:
 
         return sc_dict
 
+    def is_defensible_city(self, city: str | None) -> bool:
+        """Return whether a city type can host defensive city mechanics."""
+        return city == "fortified" or (
+            city == "fortress" and self.rules.fortress_active
+        )
+
     def province_home_country(self, province: str) -> str | None:
         """Devuelve el ID del país natal al que pertenece una provincia.
 

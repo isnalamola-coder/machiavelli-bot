@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 from machiavelli.engine.expenditure import ExpenditureProcessor
 from machiavelli.events import EventType
+from machiavelli.game.scenario import Rules
 
 
 class TestExpenditureProcessor(unittest.TestCase):
@@ -121,6 +122,27 @@ class TestExpenditureProcessor(unittest.TestCase):
                 "amount": 100,
             },
         )
+
+    def test_disabled_expenses_are_discarded_before_charging_or_emitting(self):
+        """Órdenes obsoletas de hambre/asesinato no alteran las demás."""
+        self.mock_game.scenario.rules = Rules(
+            famine_active=False,
+            assassinations_active=False,
+        )
+        famine = self._make_cmd(True, "5", actor="E A", target="pisa")
+        military = self._make_cmd(False, "H", actor="A milan", target=None)
+        funded = self._make_cmd(True, "10", actor="E F", target="A venic")
+        assassination = self._make_cmd(True, "15", actor="E E", target="V")
+        self.player.commands = [famine, military, funded, assassination]
+
+        self.processor.run()
+
+        self.assertEqual(self.player.commands, [military, funded])
+        self.assertEqual(self.player.ducats, 40)
+        self.mock_game.add_event.assert_called_once()
+        event = self.mock_game.add_event.call_args.args[0]
+        self.assertEqual(event.type, EventType.EXPENSE)
+        self.assertEqual(event.data["expense"], "F")
 
     def test_run_sequential(self):
         """Procesa órdenes en orden FIFO recalculando el saldo tras cada cobro."""

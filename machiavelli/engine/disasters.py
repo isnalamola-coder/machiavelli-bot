@@ -23,8 +23,14 @@ class DisastersManager:
             raise RuntimeError("La partida requiere un mapa cargado")
         return game_map
 
+    def _rule_enabled(self, rule: str) -> bool:
+        scenario = self.game.scenario
+        return scenario is None or bool(getattr(scenario.rules, rule))
+
     def process_famine_relief_expenses(self) -> None:
         """Procesa los gastos de Paliar hambruna."""
+        if not self._rule_enabled("famine_active"):
+            return
         cost = GameTables.expenses["A"]["cost"]
         famine_relief_expenses = [
             cmd
@@ -98,10 +104,14 @@ class DisastersManager:
 
     def resolve_famine_attrition(self) -> None:
         """Elimina las unidades reducidas por inanición al final de la primavera."""
+        if not self._rule_enabled("famine_active"):
+            return
         self._apply_disaster_deaths(EventType.FAMINE_ATTRITION, self.game.famine)
 
     def clear_famine(self) -> None:
         """Elimina el hambre al inicio del verano."""
+        if not self._rule_enabled("famine_active"):
+            return
         if self.game.famine:
             self.game.add_event(
                 TurnEvent(EventType.FAMINE_END, data={"provinces": self.game.famine})
@@ -162,6 +172,8 @@ class DisastersManager:
 
     def spawn_famine(self) -> None:
         """Genera hambre en nuevas provincias al inicio de la primavera."""
+        if not self._rule_enabled("famine_active"):
+            return
         self.game.famine = self._spawn_disaster(event_type=EventType.FAMINE_SPAWN)
 
     def spawn_plague(self) -> None:
@@ -170,6 +182,8 @@ class DisastersManager:
         Las plagas afectan inmediatamente, así que el spawn viene acompañado de las
         muertes.
         """
+        if not self._rule_enabled("plague_active"):
+            return
         plague_provinces = self._spawn_disaster(event_type=EventType.PLAGUE_SPAWN)
         self._apply_disaster_deaths(
             event_type=EventType.PLAGUE_DEATH, provinces=plague_provinces

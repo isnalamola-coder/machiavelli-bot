@@ -23,6 +23,7 @@ def _manager() -> tuple[IncomeManager, Mock, Mock, Mock]:
             "piomb": Mock(city="city", major_city=1),
             "sienn": Mock(city=None, major_city=None),
             "paler": Mock(city=None, major_city=None),
+            "keep": Mock(city="fortress", major_city=3),
         }
     )
     game.scenario = scenario
@@ -55,6 +56,21 @@ def test_income_records_sorted_provinces_and_city_breakdown() -> None:
         "total_income": 8,
     }
     assert player.ducats == 8
+
+
+def test_income_never_counts_fortress_as_city_income() -> None:
+    manager, game, player, _ = _manager()
+    player.controlled_locations = ["keep"]
+    player.garrisons = ["keep"]
+
+    manager._collect_player_income(player)
+
+    event = game.add_event.call_args.args[0]
+    assert event.data["provinces"] == ("keep",)
+    assert event.data["province_income"] == 1
+    assert event.data["cities"] == ()
+    assert event.data["city_income"] == 0
+    assert event.data["total_income"] == 1
 
 
 def test_income_excludes_famine_and_rebellions_but_keeps_garrison_city() -> None:

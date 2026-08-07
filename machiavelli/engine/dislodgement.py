@@ -27,7 +27,7 @@ class RetreatHandler:
     ) -> str | None:
         """Devuelve la retirada preferida por la unidad."""
         unit: UnitKey = outcome.unit
-        destination = None
+        destination: str | None = None
 
         # Independent garrisons do not reatreat
         if unit.player_id is None:
@@ -36,22 +36,23 @@ class RetreatHandler:
         player: Player = self.players[unit.player_id]
 
         if unit.unit_type == "A":
-            adjacent_locations = self.map.adjacent_locations(
+            raw_adjacent_locations = self.map.adjacent_locations(
                 origin=unit.origin, mode=MovementMode.LAND
             )
         elif unit.unit_type == "F":
-            adjacent_locations = self.map.adjacent_locations(
+            raw_adjacent_locations = self.map.adjacent_locations(
                 origin=unit.origin, mode=MovementMode.SEA
             )
         else:
-            adjacent_locations = set()
+            raw_adjacent_locations = set()
 
         adjacent_locations: list[str] = [
             location
-            for location in adjacent_locations
+            for location in raw_adjacent_locations
             if location not in invalid_destinations
         ]
 
+        scenario = self.game.scenario
         if adjacent_locations:
             # Tenemos lugares de retirada
             # Ordenamos los lugares de retirada por
@@ -59,9 +60,11 @@ class RetreatHandler:
             # 2. Es del país natal del jugador
             random.shuffle(adjacent_locations)
 
-            hc_provinces = self.game.scenario.home_countries_provinces(
-                player.home_countries
-            )
+            hc_provinces = (
+                scenario.home_countries_provinces(player.home_countries)
+                if scenario is not None
+                else []
+            ) or []
             controlled_provinces = player.controlled_locations
 
             # Busco que esté controlada y sea del país natal
@@ -107,13 +110,16 @@ class RetreatHandler:
                 # Tiene una ciudad fortificada o un fuerte
                 (
                     province.city == "fortified"
-                    or province.city == "fortress"
-                    and self.game.scenario.rules.fortress_active
+                    or (
+                        province.city == "fortress"
+                        and scenario is not None
+                        and scenario.rules.fortress_active
+                    )
                 )
             ):
                 if unit.unit_type == "A" or unit.unit_type == "F" and province.has_port:
                     # Nos retiramos al fuerte
-                    outcome.final_unit_type = "G"
+                    object.__setattr__(outcome, "final_unit_type", "G")
                     destination = conflict_location(unit.origin, unit.unit_type)
 
         if destination:
@@ -132,7 +138,7 @@ class RetreatHandler:
         invalid_destinations = {
             conflict_location(outcome.final_location, outcome.final_unit_type)
             for outcome in resolution.outcomes
-            if not outcome.dislodged
+            if not outcome.dislodged and outcome.final_location is not None
         }
         invalid_destinations |= resolution.contested_locations
 

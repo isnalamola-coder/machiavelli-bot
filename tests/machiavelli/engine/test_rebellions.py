@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 from machiavelli.engine.rebellions import RebellionManager
 from machiavelli.events import EventType, TurnEvent
+from machiavelli.game.scenario import Rules, Scenario, VictoryConditions
 
 
 class TestExpenseRebellionPacify(unittest.TestCase):
@@ -19,6 +20,15 @@ class TestExpenseRebellionPacify(unittest.TestCase):
         self.owner_player.rebelled_cities = ["flore"]
 
         self.mock_game.players = [self.owner_player]
+        self.mock_game.scenario = Scenario(
+            name="rebellion-rules",
+            year=1454,
+            victory_conditions=VictoryConditions(cities=99, home_countries=99),
+        )
+        self.mock_game.map.provinces = {
+            "pisa": Mock(city=None),
+            "flore": Mock(city="fortified"),
+        }
         self.mock_command = Mock()
 
     def test_expense_rebellion_pacify_province(self):
@@ -54,6 +64,17 @@ class TestExpenseRebellionPacify(unittest.TestCase):
             {"player": "FLORENCE", "province": "flore", "kind": "city"},
         )
 
+    def test_expense_rebellion_pacify_inactive_fortress_city_is_ignored(self):
+        """Una fortaleza inactiva no admite pacificación de rebelión urbana."""
+        self.mock_game.scenario.rules = Rules(fortress_active=False)
+        self.mock_game.map.provinces["flore"].city = "fortress"
+        self.mock_command.target = "flore"
+
+        self.manager.expense_rebellion_pacify(self.mock_command)
+
+        self.assertEqual(self.owner_player.rebelled_cities, ["flore"])
+        self.mock_game.add_event.assert_not_called()
+
     def test_expense_rebellion_pacify_non_rebelled(self):
         """Si el objetivo no tiene ninguna rebelión activa, no hace nada."""
         self.mock_command.target = "rome"
@@ -78,7 +99,12 @@ class TestDoRebellion(unittest.TestCase):
         self.owner.garrisons = []
 
         # Mock del escenario y mapa
-        self.mock_game.scenario.rules.fortress_active = True
+        self.mock_game.scenario = Scenario(
+            name="rebellion-rules",
+            year=1454,
+            victory_conditions=VictoryConditions(cities=99, home_countries=99),
+            rules=Rules(fortress_active=True),
+        )
         self.mock_province = Mock()
         self.mock_game.map.provinces = {"pisa": self.mock_province}
 

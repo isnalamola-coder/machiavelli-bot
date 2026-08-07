@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from contextlib import closing
 from inspect import signature
+from itertools import cycle, islice
+from os import getenv
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter
 from unittest.mock import Mock, patch
 
 import pytest
@@ -14,7 +18,12 @@ import pytest
 from machiavelli import database
 from machiavelli.engine import GameEngine
 from machiavelli.engine.military import DislodgementResolverRequired
-from machiavelli.events import InvalidTurnEventError
+from machiavelli.events import (
+    EventType,
+    InvalidTurnEventError,
+    JSONValue,
+    TurnEvent,
+)
 from machiavelli.game import Command as PublicCommand
 from machiavelli.game import DuplicatePlayerException, PlayerNotFoundException
 from machiavelli.game import Game as PublicGame
@@ -23,12 +32,72 @@ from machiavelli.game.command import Command
 from machiavelli.game.game import Game
 from machiavelli.game.player import Player
 from machiavelli.repositories.game_repository import GameRepository
-from machiavelli.services import GameService, game_service_session
+from machiavelli.services import GameService, TurnReporter, game_service_session
 
 
 def make_service(conn: sqlite3.Connection) -> GameService:
     database.upgrade_connection(conn)
     return GameService(GameRepository(conn))
+
+
+def _make_turn_event_sample(
+    valid_event_payloads: Mapping[EventType, dict[str, JSONValue]],
+) -> list[TurnEvent]:
+    catalog = [
+        TurnEvent(event_type, payload)
+        for event_type, payload in valid_event_payloads.items()
+    ]
+    return list(islice(cycle(catalog), 100))
+
+
+def _run_turn_event_pipeline(
+    service: GameService,
+    game: Game,
+) -> tuple[Game, list[str]]:
+    expected_events = game.turn_events.copy()
+    report: list[str] = []
+    for _ in range(10):
+        service.repo.save(game)
+        game = service.get_game(game.channel_id)
+        report = TurnReporter.generate(game)
+        assert game.turn_events == expected_events
+        assert report
+    return game, report
+
+
+def test_turn_event_pipeline_survives_ten_save_load_render_cycles(
+    valid_event_payloads: Mapping[EventType, dict[str, JSONValue]],
+) -> None:
+    with closing(sqlite3.connect(":memory:")) as conn:
+        service = make_service(conn)
+        game = service.create_game("Pipeline", 7099, "Be")
+        game.turn_number = 1
+        game.turn_events = _make_turn_event_sample(valid_event_payloads)
+
+        restored, report = _run_turn_event_pipeline(service, game)
+
+        assert len(restored.turn_events) == 100
+        assert report[0] == "## 📜 Pipeline, turno 1"
+
+
+@pytest.mark.skipif(
+    getenv("MACHIAVELLI_REFERENCE_PERF") != "1",
+    reason="reference performance gate",
+)
+def test_turn_event_pipeline_budget(
+    valid_event_payloads: Mapping[EventType, dict[str, JSONValue]],
+) -> None:
+    with closing(sqlite3.connect(":memory:")) as conn:
+        service = make_service(conn)
+        game = service.create_game("Pipeline", 7100, "Be")
+        game.turn_number = 1
+        game.turn_events = _make_turn_event_sample(valid_event_payloads)
+
+        started = perf_counter()
+        _run_turn_event_pipeline(service, game)
+        elapsed = perf_counter() - started
+
+        assert elapsed < 1
 
 
 def test_game_service_session_builds_once_and_closes_on_success() -> None:
