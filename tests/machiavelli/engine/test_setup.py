@@ -7,11 +7,13 @@ import pytest
 from machiavelli.engine.exceptions import (
     DuplicatePlayerError,
     GameAlreadyStartedError,
+    GameInitializationError,
     InvalidPlayerCountError,
     ScenarioNotSelectedError,
 )
 from machiavelli.engine.setup import SetupManager
 from machiavelli.events import EventType, TurnEvent
+from machiavelli.game.scenario import Power, Rules, Scenario, VictoryConditions
 
 from .helpers import create_mock_game, create_mock_player
 
@@ -79,8 +81,8 @@ def test_setup_successful_run():
     p1 = create_mock_player("p1", discord_id=100)
     p2 = create_mock_player("p2", discord_id=200)
 
-    power_venice = Mock(controlled_provinces=["venic"])
-    power_milan = Mock(controlled_provinces=["milan"])
+    power_venice = Mock(controlled_provinces=["venic"], garrisons=[])
+    power_milan = Mock(controlled_provinces=["milan"], garrisons=[])
 
     scenario = Mock(powers={"V": power_venice, "M": power_milan})
 
@@ -136,7 +138,8 @@ def test_setup_assignment_events_are_reproducible_with_injected_random():
             create_mock_player("p3", discord_id=None),
         ]
         powers = {
-            power_id: Mock(controlled_provinces=[]) for power_id in ("M", "V", "L")
+            power_id: Mock(controlled_provinces=[], garrisons=[])
+            for power_id in ("M", "V", "L")
         }
         game = create_mock_game(
             turn_number=0,
@@ -153,3 +156,48 @@ def test_setup_assignment_events_are_reproducible_with_injected_random():
         return tuple(event.data["power_id"] for event in events[1:])
 
     assert assigned_power_ids(713) == assigned_power_ids(713)
+
+
+def _scenario_with_rules(
+    rules: Rules, *, garrisons: list[str] | None = None
+) -> Scenario:
+    return Scenario(
+        name="rules-test",
+        year=1454,
+        victory_conditions=VictoryConditions(cities=1, home_countries=1),
+        rules=rules,
+        powers={"M": Power(garrisons=garrisons or [])},
+    )
+
+
+def test_setup_rejects_inactive_fortress_garrison_before_first_event():
+    player = create_mock_player("p1")
+    scenario = _scenario_with_rules(Rules(fortress_active=False), garrisons=["keep"])
+    game = create_mock_game(players=[player], scenario=scenario)
+    game.map = Mock(provinces={"keep": Mock(city="fortress")})
+
+    with pytest.raises(GameInitializationError, match="keep"):
+        SetupManager(game).run()
+
+    game.add_event.assert_not_called()
+    player.assign_power_from_scenario.assert_not_called()
+
+
+def test_setup_disables_assassination_counters_and_keeps_automatic_fortified_only():
+    player = create_mock_player("p1")
+    scenario = _scenario_with_rules(
+        Rules(fortress_active=True, assassinations_active=False),
+        garrisons=["keep"],
+    )
+    game = create_mock_game(players=[player], scenario=scenario)
+    game.map = Mock(
+        provinces={
+            "keep": Mock(city="fortress"),
+            "fort": Mock(city="fortified"),
+        }
+    )
+
+    SetupManager(game).run()
+
+    assert player.assign_power_from_scenario.call_args.args[2] == []
+    assert game.independent_garrisons == ["fort"]

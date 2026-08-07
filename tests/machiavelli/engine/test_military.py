@@ -1576,7 +1576,11 @@ class TestCyclesAndCancellationSemantics(unittest.TestCase):
 
     def test_targeted_origin_exception_in_dependency_cycle(self):
         provinces = {
-            name: Province(name, custom_id=name)
+            name: Province(
+                name,
+                custom_id=name,
+                city="fortified" if name in {"x", "y"} else None,
+            )
             for name in ("o1", "p1", "p2", "o2", "a", "x", "q", "r", "y")
         }
         for origin, target in (
@@ -2294,6 +2298,61 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
         )
         return resolution, event
 
+    def test_inactive_fortress_rejects_initial_garrison(self):
+        game = create_military_game(
+            fortress_map(),
+            [{"player_id": "P1", "power": "M", "garrisons": ["keep"]}],
+            scenario=fortress_scenario(active=False),
+            turn_events=[BEFORE_EVENT],
+        )
+        before = military_snapshot(game)
+
+        with self.assertRaises(InvalidMilitaryState):
+            MilitaryResolver(game).run(self._remove_all_dislodged)
+
+        self.assertEqual(military_snapshot(game), before)
+        self.assertEqual(game.turn_events, [BEFORE_EVENT])
+
+    def test_active_fortress_accepts_initial_garrison(self):
+        game = create_military_game(
+            fortress_map(),
+            [{"player_id": "P1", "power": "M", "garrisons": ["keep"]}],
+            scenario=fortress_scenario(active=True),
+        )
+
+        resolution, event = self._run(game)
+
+        outcome = next(
+            item
+            for item in resolution.outcomes
+            if item.unit == UnitKey("P1", "G", "keep")
+        )
+        self.assertEqual(outcome.final_unit_type, "G")
+        self.assertEqual(outcome.final_location, "keep")
+        self.assertEqual(game.players[0].garrisons, ["keep"])
+        self.assertEqual(event["cancelled_orders"], [])
+
+    def test_fortress_conversion_respects_the_scenario_rule(self):
+        inactive = create_military_game(
+            fortress_map(),
+            [{"player_id": "P1", "power": "M", "armies": ["keep"]}],
+            orders=[("A keep", "C", "G")],
+            scenario=fortress_scenario(active=False),
+        )
+        inactive_resolver = self._compiled(inactive)
+        key = UnitKey("P1", "A", "keep")
+        self.assertIn(key, inactive_resolver.invalid_orders)
+
+        active = create_military_game(
+            fortress_map(),
+            [{"player_id": "P1", "power": "M", "armies": ["keep"]}],
+            orders=[("A keep", "C", "G")],
+            scenario=fortress_scenario(active=True),
+        )
+        active_resolver = self._compiled(active)
+        self.assertNotIn(key, active_resolver.invalid_orders)
+        self.assertEqual(active_resolver.orders_by_unit[key].order_type, "C")
+
     def test_first_and_second_besiege_start_and_complete_against_garrison(self):
         first = create_military_game(
             military_map(),
@@ -2575,7 +2634,6 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
             fortress_map(),
             [{"player_id": "P1", "power": "M", "armies": ["keep"]}],
             orders=[("A keep", "B", None)],
-            independent_garrisons=["keep"],
             scenario=fortress_scenario(active=False),
         )
         resolver = self._compiled(invalid)
@@ -2588,7 +2646,6 @@ class TestSiegesAndRestrictedConversions(unittest.TestCase):
             fortress_map(),
             [{"player_id": "P1", "power": "M", "armies": ["keep"]}],
             orders=[("A keep", "H", "")],
-            independent_garrisons=["keep"],
             besieges=["keep"],
             scenario=fortress_scenario(active=False),
             turn_events=[BEFORE_EVENT],
