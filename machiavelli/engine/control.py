@@ -137,13 +137,18 @@ class ControlManager:
         # Se gana el control de un país natal si se controlan
         # todas las provincias y ciudades de éste
         scenario = self._scenario()
+        game_map = self._map()
         for home_country in scenario.home_countries:
             if home_country not in player.home_countries:
-                missing_province = any(
-                    p not in player.controlled_locations
-                    for p in scenario.home_countries[home_country].provinces
+                provinces = scenario.home_countries[home_country].provinces
+                controls_all = all(
+                    province in player.controlled_locations for province in provinces
                 )
-                if not missing_province:
+                has_countable_city = any(
+                    game_map.provinces[province].city in {"city", "fortified"}
+                    for province in provinces
+                )
+                if controls_all and has_countable_city:
                     self.game.add_event(
                         TurnEvent(
                             type=EventType.GET_HOME_COUNTRY,

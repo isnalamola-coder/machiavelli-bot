@@ -8,6 +8,7 @@ from ..game.game import Game
 from .exceptions import (
     DuplicatePlayerError,
     GameAlreadyStartedError,
+    GameInitializationError,
     InvalidPlayerCountError,
     ScenarioNotSelectedError,
 )
@@ -62,6 +63,20 @@ class SetupManager:
         if players_number != powers_number:
             raise InvalidPlayerCountError(players_number, powers_number)
 
+        game_map = self.game.map
+        if game_map is None:
+            raise RuntimeError("La partida requiere un mapa cargado")
+        for power in self.game.scenario.powers.values():
+            for location in power.garrisons:
+                province = game_map.provinces.get(location)
+                if province is None or not self.game.scenario.is_defensible_city(
+                    province.city
+                ):
+                    raise GameInitializationError(
+                        f"Guarnición inicial inválida en {location}: "
+                        "la plaza no está defendible."
+                    )
+
         self.game.add_event(
             TurnEvent(
                 type=EventType.START_GAME,
@@ -72,12 +87,12 @@ class SetupManager:
         # Sorteamos las facciones entre los jugadores
         power_ids = list(self.game.scenario.powers.keys())
         self.rng.shuffle(power_ids)
+        assassination_targets = (
+            power_ids if self.game.scenario.rules.assassinations_active else []
+        )
 
         # Coloca guarniciones independientes en todas las ciudades del mapa
         # Más fácil y limpio que buscar luego las ciudades no controladas por nadie
-        game_map = self.game.map
-        if game_map is None:
-            raise RuntimeError("La partida requiere un mapa cargado")
         garrisons = [
             key
             for key, province in game_map.provinces.items()
@@ -98,7 +113,7 @@ class SetupManager:
 
             # Asigna la potencia al jugador, junto con sus provincias y unidades.
             power = self.game.scenario.powers[power_id]
-            player.assign_power_from_scenario(power_id, power, power_ids)
+            player.assign_power_from_scenario(power_id, power, assassination_targets)
 
             # Elimina las guarniciones independientes de sus provincias
             garrisons = [p for p in garrisons if p not in power.controlled_provinces]

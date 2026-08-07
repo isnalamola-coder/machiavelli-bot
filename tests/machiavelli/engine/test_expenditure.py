@@ -142,3 +142,22 @@ class TestExpenditureProcessor(unittest.TestCase):
         self.assertEqual(calls[0][0][0].type, EventType.EXPENSE)
         self.assertEqual(calls[1][0][0].type, EventType.EXPENSE_NO_FUNDS)
         self.assertEqual(calls[2][0][0].type, EventType.EXPENSE)
+
+    def test_disabled_expenses_are_dropped_before_validation_or_payment(self):
+        self.mock_game.scenario.rules.famine_active = False
+        self.mock_game.scenario.rules.assassinations_active = False
+        famine = self._make_cmd(True, "5", actor="E A")
+        allowed = self._make_cmd(True, "10", actor="E G")
+        assassination = self._make_cmd(True, "5", actor="E E")
+        self.player.commands = [famine, allowed, assassination]
+
+        self.processor.run()
+
+        self.assertEqual(self.player.commands, [allowed])
+        self.assertEqual(self.player.ducats, 40)
+        famine.is_valid_expense.assert_not_called()
+        assassination.is_valid_expense.assert_not_called()
+        self.mock_game.add_event.assert_called_once()
+        event = self.mock_game.add_event.call_args.args[0]
+        self.assertEqual(event.type, EventType.EXPENSE)
+        self.assertEqual(event.data["expense"], "G")

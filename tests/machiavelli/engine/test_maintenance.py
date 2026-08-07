@@ -203,6 +203,21 @@ def test_maintenance_results_are_parametrized(
     assert player.ducats == expected_ducats
 
 
+def test_fortress_is_not_a_recruitment_location() -> None:
+    game, player = _state()
+    player.home_countries.append("Other")
+    player.controlled_locations.append("keep")
+    game.require_map.return_value.provinces["keep"] = DummyProvince(city="fortress")
+    player.commands = [Command(game, player, "A keep", "R")]
+
+    MaintenanceResolver(game).run()
+
+    event = _events(game)[0]
+    assert event.data["result"] == "invalid_home_or_control"
+    assert player.armies == []
+    assert player.ducats == 20
+
+
 def test_same_phase_results_preserve_command_order() -> None:
     game, player = _state()
     player.armies = ["rome", "flore"]
