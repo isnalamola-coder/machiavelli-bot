@@ -8,7 +8,6 @@ from .assassination import AssassinationResolver
 from .bribes import BribeResolver
 from .control import ControlManager
 from .disasters import DisastersManager
-from .dislodgement import RetreatHandler
 from .expenditure import ExpenditureProcessor
 from .income import IncomeManager
 from .maintenance import MaintenanceResolver
@@ -25,9 +24,13 @@ class GameEngine:
         game: Game,
         rng: Random | None = None,
     ):
-        """Configura el motor y el gestor opcional de retiradas militares."""
+        """Configura el motor y la fuente opcional de aleatoriedad."""
         self.game = game
         self.rng = rng if rng is not None else Random()
+
+    def _rule_enabled(self, rule: str) -> bool:
+        scenario = self.game.scenario
+        return scenario is None or bool(getattr(scenario.rules, rule))
 
     def run_startup(self) -> None:
         """Ejecutamos el flujo completo del inicio de la partida."""
@@ -40,7 +43,12 @@ class GameEngine:
         SetupManager(self.game, self.rng).run()
 
         # Una vez arrancada la partida, corremos las primeras fases
-        DisastersManager(self.game).spawn_famine()
+        if (
+            self.game.turn_number == 0
+            and self._rule_enabled("famine_active")
+            and self._rule_enabled("first_turn_famine")
+        ):
+            DisastersManager(self.game).spawn_famine()
         IncomeManager(self.game).run()
 
     def run_maintenance(self) -> None:
@@ -78,24 +86,36 @@ class GameEngine:
         # 9. Se calculan los ingresos (solo inicio de primavera, season==0)
         # 10. Se elimina el hambre (solo inicio de verano, season==2)
         # 11. Se resuelve la plaga (solo inicio de verano, season==2)
-        disaster_manager = DisastersManager(self.game)  # Lo usaremos varias veces
+        famine_active = self._rule_enabled("famine_active")
+        plague_active = self._rule_enabled("plague_active")
+        assassinations_active = self._rule_enabled("assassinations_active")
+        disaster_manager = (
+            DisastersManager(self.game)
+            if famine_active or (season == 2 and plague_active)
+            else None
+        )
 
         ExpenditureProcessor(self.game).run()
-        disaster_manager.process_famine_relief_expenses()
+        if famine_active and disaster_manager is not None:
+            disaster_manager.process_famine_relief_expenses()
         RebellionManager(self.game).rebellion_expenses()
         BribeResolver(self.game).run()
-        AssassinationResolver(self.game).run()
+        if assassinations_active:
+            AssassinationResolver(self.game).run()
         # Un fallo militar interrumpe la campaña antes de hambre, control y plaga.
-        MilitaryResolver(self.game).run(dislodgement_resolver=RetreatHandler(self.game))
-        if season == 2:
+        MilitaryResolver(self.game).run()
+        if season == 2 and famine_active and disaster_manager is not None:
             disaster_manager.resolve_famine_attrition()
         ControlManager(self.game).run()
         if season == 0:
-            disaster_manager.spawn_famine()
+            if famine_active and disaster_manager is not None:
+                disaster_manager.spawn_famine()
             IncomeManager(self.game).run()
         if season == 2:
-            disaster_manager.clear_famine()
-            disaster_manager.spawn_plague()
+            if famine_active and disaster_manager is not None:
+                disaster_manager.clear_famine()
+            if plague_active and disaster_manager is not None:
+                disaster_manager.spawn_plague()
 
     def run(self) -> None:
         """Ejecuta el flujo completo del turno actual.
