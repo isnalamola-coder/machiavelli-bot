@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
 from typing import Self
@@ -167,9 +168,12 @@ class Game:
                 ],
             )
 
-    def report_status(self) -> list[str]:
+    def report_status(
+        self,
+        safe_text: Callable[[str], str] = str,
+    ) -> list[str]:
         """Return the current public game status as report lines."""
-        report = [f"## __**Partida**: {self.name}__"]
+        report = [f"## __**Partida**: {safe_text(self.name)}__"]
         report.append(
             f"**Escenario:** {self.scenario.name if self.scenario else 'Por definir'}."
         )
@@ -181,7 +185,7 @@ class Game:
             report.append("### __**Estado:** Por comenzar.__")
             if self.players:
                 players = ", ".join(
-                    f"<@{player.discord_id}> ({player.player_id})"
+                    f"<@{player.discord_id}> ({safe_text(player.player_id)})"
                     for player in self.players
                 )
                 if self.scenario:
@@ -208,7 +212,7 @@ class Game:
             ordered_players = [player for player in self.players if player.commands]
             if ordered_players:
                 report.extend(
-                    f"- <@{player.discord_id}> ({player.player_id})"
+                    f"- <@{player.discord_id}> ({safe_text(player.player_id)})"
                     for player in ordered_players
                 )
             else:
@@ -315,52 +319,6 @@ class Game:
             excluded_locations = None
         game.map = Map.load_map(exclude_ids=excluded_locations)
         return game
-
-    def turn_report(self) -> list[str]:
-        """Return the public report for the current turn."""
-        if self.scenario is None or self.map is None:
-            raise ValueError("La partida requiere escenario y mapa para informar")
-
-        year = self.scenario.year + (self.turn_number - 1) // 4
-        season = (
-            "Primavera (mantenimiento)",
-            "Primavera (campaña)",
-            "Verano",
-            "Otoño",
-        )[(self.turn_number - 1) % 4]
-        report = [
-            f"## 📜 {self.name}, turno {self.turn_number}",
-            f"### 🗓️ {season} de {year}",
-            "> ⚠️ **EVENTOS DEL TURNO ANTERIOR**",
-        ]
-        report.extend(f"> {event}" for event in self.turn_events)
-        report.append("## 🗺️ REPORTE DE SITUACIÓN")
-
-        if self.famine:
-            names = [
-                province.name
-                for key, province in self.map.provinces.items()
-                if key in self.famine
-            ]
-            famine = " y ".join([", ".join(names[:-1]), names[-1]])
-            report.append(f"🌾 **Hambre:** {famine}")
-
-        if self.independent_garrisons:
-            names = [
-                province.name
-                for key, province in self.map.provinces.items()
-                if key in self.independent_garrisons
-            ]
-            garrisons = (
-                " y ".join([", ".join(names[:-1]), names[-1]])
-                if len(names) > 1
-                else names[0]
-            )
-            report.append(f"🛡️ **Guarniciones independientes:** {garrisons}")
-
-        for player in self.players:
-            report.extend(player.player_report())
-        return report
 
     def add_event(self, turn_event: TurnEvent) -> None:
         """Append one validated event without serializing or rendering it."""

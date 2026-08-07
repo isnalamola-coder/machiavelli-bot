@@ -1,0 +1,481 @@
+"""Readable reporting for validated turn events."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, cast
+
+from discord.utils import escape_markdown, escape_mentions
+
+from machiavelli.events import (
+    EventType,
+    FrozenJSONValue,
+    InvalidTurnEventError,
+    TurnEvent,
+)
+from machiavelli.game.tables import GameTables
+
+if TYPE_CHECKING:
+    from machiavelli.game.game import Game
+
+
+type UnitKeyRecord = tuple[str | None, str, str]
+type OutcomeRecord = tuple[UnitKeyRecord, str, str | None, bool]
+type RebellionRecord = tuple[str | None, str, str, str]
+type SiegeRecord = tuple[UnitKeyRecord, str, str]
+
+_SEASONS = (
+    "Primavera (mantenimiento)",
+    "Primavera (campaña)",
+    "Verano",
+    "Otoño",
+)
+_MAINTENANCE_RESULTS = {
+    "disbanded": "desbandada",
+    "unit_not_found": "unidad no encontrada",
+    "maintained": "mantenida",
+    "disbanded_no_funds": "desbandada por falta de fondos",
+    "recruited": "reclutada",
+    "recruitment_no_funds": "reclutamiento rechazado por falta de fondos",
+    "invalid_home_or_control": "reclutamiento fuera de territorio válido",
+    "space_occupied": "espacio ocupado",
+    "port_required": "puerto necesario",
+    "rebelled_city": "ciudad rebelde",
+    "fortified_city_required": "ciudad fortificada necesaria",
+}
+_REBELLION_KINDS = {"province": "provincial", "city": "urbana"}
+
+
+class TurnReporter:
+    """Generate the public report for one validated turn history."""
+
+    @staticmethod
+    def generate(game: Game) -> list[str]:
+        """Render headers, events, and the current situation without mutation."""
+        scenario = game.require_scenario()
+        game.require_map()
+        year = scenario.year + (game.turn_number - 1) // 4
+        season = _SEASONS[(game.turn_number - 1) % 4]
+        report = [
+            f"## 📜 {TurnReporter._safe(game.name)}, turno {game.turn_number}",
+            f"### 🗓️ {season} de {year}",
+            "> ⚠️ **EVENTOS DEL TURNO ANTERIOR**",
+        ]
+        for event in game.turn_events:
+            report.extend(TurnReporter._render_event(game, event))
+        report.append("## 🗺️ REPORTE DE SITUACIÓN")
+        report.extend(game.report_status(TurnReporter._safe))
+        return report
+
+    @staticmethod
+    def _render_event(game: Game, event: TurnEvent) -> list[str]:
+        data = event.data
+        match event.type:
+            case EventType.START_GAME:
+                scenario = TurnReporter._safe(cast(str, data["scenario"]))
+                return [f"Se inició la partida con el escenario {scenario}."]
+            case EventType.START_GAME_POWER_ASSIGNED:
+                discord_id = cast(int | None, data["discord_id"])
+                player = (
+                    f"<@{discord_id}>"
+                    if discord_id is not None
+                    else TurnReporter._player(game, cast(str, data["player_id"]))
+                )
+                power = TurnReporter._power(game, cast(str, data["power_id"]))
+                return [f"{player} recibió la potencia {power}."]
+            case EventType.START_SEASON:
+                season = _SEASONS[cast(int, data["season"])]
+                return [f"Comenzó {season} de {cast(int, data['year'])}."]
+            case EventType.FAMINE_SPAWN:
+                provinces = TurnReporter._locations(
+                    game, cast(tuple[str, ...], data["provinces"])
+                )
+                return [
+                    f"El hambre apareció tras una tirada de "
+                    f"{cast(int, data['severity_roll'])} en {provinces}."
+                ]
+            case EventType.FAMINE_RELIEF:
+                player = TurnReporter._player(game, cast(str, data["player"]))
+                province = TurnReporter._location(game, cast(str, data["province"]))
+                return [f"{player} alivió el hambre en {province}."]
+            case EventType.FAMINE_ATTRITION:
+                player = TurnReporter._nullable_player(game, data["player"])
+                units = TurnReporter._units(game, cast(tuple[str, ...], data["units"]))
+                return [f"El hambre eliminó unidades de {player}: {units}."]
+            case EventType.FAMINE_END:
+                provinces = TurnReporter._locations(
+                    game, cast(tuple[str, ...], data["provinces"])
+                )
+                return [f"Terminó el hambre en {provinces}."]
+            case EventType.PLAGUE_SPAWN:
+                provinces = TurnReporter._locations(
+                    game, cast(tuple[str, ...], data["provinces"])
+                )
+                return [
+                    f"La plaga apareció tras una tirada de "
+                    f"{cast(int, data['severity_roll'])} en {provinces}."
+                ]
+            case EventType.PLAGUE_DEATH:
+                player = TurnReporter._nullable_player(game, data["player"])
+                units = TurnReporter._units(game, cast(tuple[str, ...], data["units"]))
+                return [f"La plaga eliminó unidades de {player}: {units}."]
+            case EventType.REBELLION_PACIFY:
+                player = TurnReporter._player(game, cast(str, data["player"]))
+                province = TurnReporter._location(game, cast(str, data["province"]))
+                kind = _REBELLION_KINDS[cast(str, data["kind"])]
+                return [f"{player} pacificó la rebelión {kind} de {province}."]
+            case EventType.REBELLION_PROVINCE:
+                return [TurnReporter._rebellion_line(game, data, "provincial")]
+            case EventType.REBELLION_CITY:
+                return [TurnReporter._rebellion_line(game, data, "urbana")]
+            case EventType.EXPENSE:
+                return [TurnReporter._expense_line(game, data, "registró")]
+            case EventType.EXPENSE_NO_FUNDS:
+                return [
+                    TurnReporter._expense_line(
+                        game, data, "no pudo pagar", include_amount=False
+                    )
+                ]
+            case EventType.EXPENSE_SYNTAX_ERROR:
+                return [
+                    TurnReporter._expense_line(game, data, "presentó incorrectamente")
+                ]
+            case EventType.BRIBE_EXECUTED:
+                return [TurnReporter._expense_line(game, data, "ejecutó")]
+            case EventType.INCOME_COLLECTED:
+                return [TurnReporter._income_line(game, data)]
+            case EventType.MAINTENANCE_ORDER_RESOLVED:
+                return [TurnReporter._maintenance_order_line(game, data)]
+            case EventType.MAINTENANCE_SUMMARY:
+                player = TurnReporter._player(game, cast(str, data["player"]))
+                return [
+                    f"Mantenimiento de {player}: "
+                    f"{cast(int, data['initial_ducats'])} ducados iniciales, "
+                    f"{cast(int, data['expenses'])} gastados y "
+                    f"{cast(int, data['remaining_ducats'])} restantes."
+                ]
+            case EventType.GET_CONTROL:
+                return [TurnReporter._control_line(game, data, gained=True)]
+            case EventType.LOSE_CONTROL:
+                return [TurnReporter._control_line(game, data, gained=False)]
+            case EventType.GET_HOME_COUNTRY:
+                return [TurnReporter._home_country_line(game, data, gained=True)]
+            case EventType.LOSE_HOME_COUNTRY:
+                return [TurnReporter._home_country_line(game, data, gained=False)]
+            case EventType.PLAYER_ELIMINATED:
+                player = TurnReporter._player(game, cast(str, data["player"]))
+                return [f"{player} fue eliminado de la partida."]
+            case EventType.PLAYER_WON:
+                player = TurnReporter._player(game, cast(str, data["player"]))
+                return [
+                    f"{player} ganó con {cast(int, data['cities'])} ciudades y "
+                    f"{cast(int, data['home_countries'])} países natales."
+                ]
+            case EventType.MILITARY_RESOLUTION:
+                return TurnReporter._render_military(game, data)
+            case _:
+                raise InvalidTurnEventError(event_type=str(event.type))
+
+    @staticmethod
+    def _safe(value: str) -> str:
+        return escape_mentions(escape_markdown(value, as_needed=False))
+
+    @staticmethod
+    def _player(game: Game, value: str) -> str:
+        for player in game.players:
+            power_name = GameTables.powers.get(player.power or "", player.power)
+            if value in {player.player_id, player.power, power_name}:
+                if player.discord_id is not None:
+                    return f"<@{player.discord_id}>"
+                if player.power is not None:
+                    return TurnReporter._power(game, player.power)
+                return TurnReporter._safe(player.player_id)
+        return TurnReporter._safe(value)
+
+    @staticmethod
+    def _nullable_player(game: Game, value: FrozenJSONValue) -> str:
+        if value is None:
+            return "una guarnición independiente"
+        return TurnReporter._player(game, cast(str, value))
+
+    @staticmethod
+    def _power(game: Game, value: str) -> str:
+        scenario = game.require_scenario()
+        if value in scenario.powers:
+            return scenario.powers[value].name
+        if value in GameTables.powers:
+            return GameTables.powers[value]
+        for power in scenario.powers.values():
+            if power.name == value:
+                return power.name
+        return TurnReporter._safe(value)
+
+    @staticmethod
+    def _location(game: Game, value: str) -> str:
+        base, separator, coast = value.partition(" ")
+        game_map = game.require_map()
+        location = game_map.provinces.get(base) or game_map.seas.get(base)
+        if location is None:
+            return TurnReporter._safe(value)
+        if not separator:
+            return location.name
+        return f"{location.name} ({TurnReporter._safe(coast)})"
+
+    @staticmethod
+    def _locations(game: Game, values: tuple[str, ...]) -> str:
+        locations = [TurnReporter._location(game, value) for value in values]
+        return TurnReporter._join(locations)
+
+    @staticmethod
+    def _unit(game: Game, value: str) -> str:
+        unit_type, separator, location = value.partition(" ")
+        if not separator or unit_type not in {"A", "F", "G"}:
+            return TurnReporter._safe(value)
+        actor = GameTables.actors[unit_type]
+        return f"{actor} de {TurnReporter._location(game, location)}"
+
+    @staticmethod
+    def _units(game: Game, values: tuple[str, ...]) -> str:
+        return TurnReporter._join([TurnReporter._unit(game, value) for value in values])
+
+    @staticmethod
+    def _join(values: list[str]) -> str:
+        if not values:
+            return "ninguno"
+        if len(values) == 1:
+            return values[0]
+        return " y ".join([", ".join(values[:-1]), values[-1]])
+
+    @staticmethod
+    def _rebellion_line(
+        game: Game,
+        data: Mapping[str, FrozenJSONValue],
+        kind: str,
+    ) -> str:
+        player = TurnReporter._player(game, cast(str, data["player"]))
+        province = TurnReporter._location(game, cast(str, data["province"]))
+        return f"Comenzó una rebelión {kind} de {province} contra {player}."
+
+    @staticmethod
+    def _expense_name(value: str) -> str:
+        expense = GameTables.expenses.get(value)
+        return expense["text"] if expense is not None else TurnReporter._safe(value)
+
+    @staticmethod
+    def _expense_target(
+        game: Game,
+        expense_code: str,
+        value: FrozenJSONValue,
+    ) -> str:
+        if value is None:
+            return ""
+        target = cast(str, value)
+        expense = GameTables.expenses.get(expense_code)
+        target_type = expense["target_type"] if expense is not None else None
+        if target_type == "power":
+            rendered = TurnReporter._power(game, target)
+        elif target_type == "unit":
+            rendered = TurnReporter._unit(game, target)
+        elif target_type == "province":
+            rendered = TurnReporter._location(game, target)
+        elif target.partition(" ")[0] in {"A", "F", "G"}:
+            rendered = TurnReporter._unit(game, target)
+        else:
+            rendered = TurnReporter._location(game, target)
+        return f" sobre {rendered}"
+
+    @staticmethod
+    def _expense_line(
+        game: Game,
+        data: Mapping[str, FrozenJSONValue],
+        action: str,
+        *,
+        include_amount: bool = True,
+    ) -> str:
+        player = TurnReporter._player(game, cast(str, data["player"]))
+        expense_code = cast(str, data["expense"])
+        expense = TurnReporter._expense_name(expense_code)
+        target = TurnReporter._expense_target(game, expense_code, data["target"])
+        raw_amount = data["amount"]
+        rendered_amount = (
+            str(raw_amount)
+            if isinstance(raw_amount, int)
+            else TurnReporter._safe(cast(str, raw_amount))
+        )
+        amount = f" por {rendered_amount} ducados" if include_amount else ""
+        return f"{player} {action} {expense}{target}{amount}."
+
+    @staticmethod
+    def _income_line(game: Game, data: Mapping[str, FrozenJSONValue]) -> str:
+        player = TurnReporter._player(game, cast(str, data["player"]))
+        provinces = TurnReporter._locations(
+            game, cast(tuple[str, ...], data["provinces"])
+        )
+        cities = TurnReporter._locations(game, cast(tuple[str, ...], data["cities"]))
+        variable_values = cast(
+            tuple[Mapping[str, FrozenJSONValue], ...], data["variable_income"]
+        )
+        variable = TurnReporter._join(
+            [TurnReporter._variable_income(game, item) for item in variable_values]
+        )
+        return (
+            f"{player} recaudó {cast(int, data['total_income'])} ducados: "
+            f"provincias {provinces} ({cast(int, data['province_income'])}), "
+            f"ciudades {cities} ({cast(int, data['city_income'])}) e ingresos "
+            f"variables {variable}."
+        )
+
+    @staticmethod
+    def _variable_income(game: Game, data: Mapping[str, FrozenJSONValue]) -> str:
+        source = cast(str, data["source"])
+        if data["source_type"] == "home_country":
+            source_name = TurnReporter._power(game, source)
+        else:
+            source_name = TurnReporter._location(game, source)
+        return (
+            f"{source_name}: tirada {cast(int, data['roll'])}, "
+            f"{cast(int, data['amount'])} ducados"
+        )
+
+    @staticmethod
+    def _maintenance_order_line(game: Game, data: Mapping[str, FrozenJSONValue]) -> str:
+        player = TurnReporter._player(game, cast(str, data["player"]))
+        actor = TurnReporter._unit(game, cast(str, data["actor"]))
+        order_code = cast(str, data["order"])
+        order = GameTables.maintenance_orders[order_code]["text"]
+        target = TurnReporter._expense_target(game, order_code, data["target"])
+        result_code = cast(str, data["result"])
+        result = _MAINTENANCE_RESULTS[result_code]
+        return (
+            f"Mantenimiento de {player}: {actor}, orden {order}{target}, "
+            f"resultado {result}, coste {cast(int, data['cost'])} ducados."
+        )
+
+    @staticmethod
+    def _control_line(
+        game: Game,
+        data: Mapping[str, FrozenJSONValue],
+        *,
+        gained: bool,
+    ) -> str:
+        player = TurnReporter._player(game, cast(str, data["player"]))
+        provinces = TurnReporter._locations(
+            game, cast(tuple[str, ...], data["provinces"])
+        )
+        action = "obtuvo el control de" if gained else "perdió el control de"
+        return f"{player} {action} {provinces}."
+
+    @staticmethod
+    def _home_country_line(
+        game: Game,
+        data: Mapping[str, FrozenJSONValue],
+        *,
+        gained: bool,
+    ) -> str:
+        player = TurnReporter._player(game, cast(str, data["player"]))
+        home_country = TurnReporter._power(game, cast(str, data["home_country"]))
+        action = "obtuvo" if gained else "perdió"
+        return f"{player} {action} el país natal {home_country}."
+
+    @staticmethod
+    def _render_military(
+        game: Game,
+        data: Mapping[str, FrozenJSONValue],
+    ) -> list[str]:
+        outcomes = cast(tuple[OutcomeRecord, ...], data["outcomes"])
+        cancelled = cast(tuple[UnitKeyRecord, ...], data["cancelled_orders"])
+        broken_convoys = cast(tuple[UnitKeyRecord, ...], data["broken_convoys"])
+        dislodgements = cast(tuple[UnitKeyRecord, ...], data["dislodgements"])
+        rebellions = cast(tuple[RebellionRecord, ...], data["rebellions"])
+        sieges = cast(tuple[SiegeRecord, ...], data["sieges"])
+        if not any(
+            (outcomes, cancelled, broken_convoys, dislodgements, rebellions, sieges)
+        ):
+            return ["Sin cambios militares."]
+
+        lines: list[str] = []
+        if outcomes:
+            lines.append("**Resultados militares:**")
+            lines.extend(
+                TurnReporter._military_outcome_line(game, outcome)
+                for outcome in outcomes
+            )
+        if cancelled:
+            lines.append("**Órdenes canceladas:**")
+            lines.extend(
+                f"- {TurnReporter._military_unit(game, unit)}." for unit in cancelled
+            )
+        if broken_convoys:
+            lines.append("**Convoyes rotos:**")
+            lines.extend(
+                f"- {TurnReporter._military_unit(game, unit)}."
+                for unit in broken_convoys
+            )
+        if dislodgements:
+            lines.append("**Desalojos:**")
+            lines.extend(
+                f"- {TurnReporter._military_unit(game, unit)}."
+                for unit in dislodgements
+            )
+        if rebellions:
+            lines.append("**Rebeliones:**")
+            lines.extend(
+                TurnReporter._military_rebellion_line(game, rebellion)
+                for rebellion in rebellions
+            )
+        if sieges:
+            lines.append("**Asedios:**")
+            lines.extend(
+                TurnReporter._military_siege_line(game, siege) for siege in sieges
+            )
+        return lines
+
+    @staticmethod
+    def _military_unit(game: Game, unit: UnitKeyRecord) -> str:
+        owner, unit_type, origin = unit
+        actor = GameTables.actors[unit_type]
+        location = TurnReporter._location(game, origin)
+        if owner is None:
+            return f"{actor} independiente de {location}"
+        player = TurnReporter._player(game, owner)
+        return f"{actor} de {location} de {player}"
+
+    @staticmethod
+    def _military_outcome_line(game: Game, outcome: OutcomeRecord) -> str:
+        unit, final_type, final_location, dislodged = outcome
+        original = TurnReporter._military_unit(game, unit)
+        final_actor = GameTables.actors[final_type]
+        destination = (
+            f"en {TurnReporter._location(game, final_location)}"
+            if final_location is not None
+            else "sin destino"
+        )
+        dislodged_text = "sí" if dislodged else "no"
+        return (
+            f"- {original} terminó como {final_actor} {destination}; "
+            f"desalojada: {dislodged_text}."
+        )
+
+    @staticmethod
+    def _military_rebellion_line(game: Game, rebellion: RebellionRecord) -> str:
+        player_id, kind, province_id, state = rebellion
+        player = TurnReporter._nullable_player(game, player_id)
+        kind_name = _REBELLION_KINDS[kind]
+        province = TurnReporter._location(game, province_id)
+        state_name = {"subdued": "sometida", "liberated": "liberada"}[state]
+        return f"- Rebelión {kind_name} de {province} para {player}: {state_name}."
+
+    @staticmethod
+    def _military_siege_line(game: Game, siege: SiegeRecord) -> str:
+        unit, province_id, state = siege
+        rendered_unit = TurnReporter._military_unit(game, unit)
+        province = TurnReporter._location(game, province_id)
+        state_name = {
+            "started": "iniciado",
+            "completed": "completado",
+            "lifted": "levantado",
+        }[state]
+        return f"- {rendered_unit} en {province}: {state_name}."
+
+
+__all__ = ["TurnReporter"]

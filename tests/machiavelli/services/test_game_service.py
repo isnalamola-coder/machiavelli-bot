@@ -6,10 +6,12 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
 import pytest
 
 from machiavelli import database
+from machiavelli.events import InvalidTurnEventError
 from machiavelli.game import Command as PublicCommand
 from machiavelli.game import DuplicatePlayerException, PlayerNotFoundException
 from machiavelli.game import Game as PublicGame
@@ -124,6 +126,66 @@ def test_submit_and_replace_command_survive_reload() -> None:
             "A",
             "pavia",
         )
+
+
+def test_get_turn_report_uses_the_reporter_and_returns_its_lines() -> None:
+    repository = Mock(name="repository")
+    game = Mock(name="game")
+    repository.get_by_channel.return_value = game
+    service = GameService(repository)
+
+    with patch(
+        "machiavelli.services.game_service.TurnReporter.generate",
+        return_value=["report one", "report two"],
+    ) as generate:
+        report = service.get_turn_report(7004)
+
+    assert report == ["report one", "report two"]
+    generate.assert_called_once_with(game)
+    repository.save.assert_not_called()
+
+
+def test_run_turn_uses_the_reporter_before_saving() -> None:
+    repository = Mock(name="repository")
+    game = Mock(name="game")
+    repository.get_by_channel.return_value = game
+    service = GameService(repository)
+
+    with (
+        patch("machiavelli.services.game_service.GameEngine") as engine_class,
+        patch(
+            "machiavelli.services.game_service.TurnReporter.generate",
+            return_value=["turn report"],
+        ) as generate,
+    ):
+        report = service.run_turn(7005)
+
+    assert report == ["turn report"]
+    engine_class.assert_called_once_with(game)
+    engine_class.return_value.run.assert_called_once_with()
+    generate.assert_called_once_with(game)
+    repository.save.assert_called_once_with(game)
+
+
+def test_run_turn_does_not_save_when_reporting_fails() -> None:
+    repository = Mock(name="repository")
+    game = Mock(name="game")
+    repository.get_by_channel.return_value = game
+    service = GameService(repository)
+    failure = InvalidTurnEventError(row_id=9, event_type="broken")
+
+    with (
+        patch("machiavelli.services.game_service.GameEngine"),
+        patch(
+            "machiavelli.services.game_service.TurnReporter.generate",
+            side_effect=failure,
+        ),
+        pytest.raises(InvalidTurnEventError) as caught,
+    ):
+        service.run_turn(7006)
+
+    assert caught.value is failure
+    repository.save.assert_not_called()
 
 
 def test_run_turn_persists_and_can_continue_after_reopening_connection() -> None:
