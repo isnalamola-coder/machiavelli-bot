@@ -63,3 +63,119 @@ def test_forbidden_legacy_files_do_not_exist() -> None:
         Path("cli.log"),
     )
     assert not [path for path in forbidden_paths if path.exists()]
+
+
+def test_discord_imports_only_the_public_service_boundary() -> None:
+    module = ast.parse(Path("machiavelli/discord.py").read_text(encoding="utf-8"))
+    imports = {
+        alias.name
+        for node in ast.walk(module)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imports.update(
+        node.module or ""
+        for node in ast.walk(module)
+        if isinstance(node, ast.ImportFrom)
+    )
+
+    assert "sqlite3" not in imports
+    assert not any(name.startswith("machiavelli.db") for name in imports)
+    assert not any(name.startswith("machiavelli.repositories") for name in imports)
+
+
+def test_discord_has_no_public_dislodgement_resolver_parameter() -> None:
+    module = ast.parse(Path("machiavelli/discord.py").read_text(encoding="utf-8"))
+    for node in ast.walk(module):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        parameters = [
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        ]
+        assert "dislodgement_resolver" not in {
+            parameter.arg for parameter in parameters
+        }
+
+
+def test_turn_producers_do_not_build_presentation_or_legacy_records() -> None:
+    paths = (
+        Path("machiavelli/events.py"),
+        Path("machiavelli/engine/setup.py"),
+        Path("machiavelli/engine/income.py"),
+        Path("machiavelli/engine/maintenance.py"),
+        Path("machiavelli/engine/disasters.py"),
+        Path("machiavelli/engine/expenditure.py"),
+        Path("machiavelli/engine/bribes.py"),
+        Path("machiavelli/engine/rebellions.py"),
+        Path("machiavelli/engine/control.py"),
+        Path("machiavelli/engine/military.py"),
+        Path("machiavelli/engine/core.py"),
+    )
+    forbidden_fragments = (
+        "tipo|json",
+        "**",
+        "##",
+        "<@",
+        "@everyone",
+        "@here",
+        "`",
+    )
+
+    for path in paths:
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        strings = (
+            node.value
+            for node in ast.walk(module)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        )
+        assert not [
+            value
+            for value in strings
+            if any(fragment in value for fragment in forbidden_fragments)
+        ], path
+
+
+def test_game_turn_history_has_no_presentation_or_legacy_records() -> None:
+    module = ast.parse(Path("machiavelli/game/game.py").read_text(encoding="utf-8"))
+    game_class = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "Game"
+    )
+    methods = {
+        node.name: node
+        for node in game_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"save", "load_game", "add_event"}
+    }
+    assert methods.keys() == {"save", "load_game", "add_event"}
+
+    forbidden_fragments = (
+        "tipo|json",
+        "**",
+        "##",
+        "<@",
+        "@everyone",
+        "@here",
+        "`",
+    )
+    for name, method in methods.items():
+        strings = (
+            node.value
+            for node in ast.walk(method)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        )
+        assert not [
+            value
+            for value in strings
+            if any(fragment in value for fragment in forbidden_fragments)
+        ], name
+
+
+def test_game_has_no_removed_turn_algorithms_or_reporter() -> None:
+    from machiavelli.game.game import Game
+
+    for name in ("initial_setup", "spring_start", "turn_report"):
+        assert not hasattr(Game, name)
