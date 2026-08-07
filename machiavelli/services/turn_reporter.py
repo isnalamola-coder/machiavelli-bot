@@ -64,7 +64,32 @@ class TurnReporter:
         for event in game.turn_events:
             report.extend(TurnReporter._render_event(game, event))
         report.append("## 🗺️ REPORTE DE SITUACIÓN")
-        report.extend(game.report_status(TurnReporter._safe))
+
+        if game.famine:
+            names = [
+                province.name
+                for key, province in game.map.provinces.items()
+                if key in game.famine
+            ]
+            famine = " y ".join([", ".join(names[:-1]), names[-1]])
+            report.append(f"🌾 **Hambre:** {famine}")
+
+        if game.independent_garrisons:
+            names = [
+                province.name
+                for key, province in game.map.provinces.items()
+                if key in game.independent_garrisons
+            ]
+            garrisons = (
+                " y ".join([", ".join(names[:-1]), names[-1]])
+                if len(names) > 1
+                else names[0]
+            )
+            report.append(f"🛡️ **Guarniciones independientes:** {garrisons}")
+
+        for player in game.players:
+            report.extend(player.player_report())
+
         return report
 
     @staticmethod

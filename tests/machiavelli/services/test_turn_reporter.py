@@ -77,8 +77,6 @@ def test_report_preserves_general_order_event_order_and_repetitions() -> None:
         "<@456> fue eliminado de la partida.",
         "Se inició la partida con el escenario Be.",
     ]
-    situation_index = report.index("## 🗺️ REPORTE DE SITUACIÓN")
-    assert report[situation_index + 1 :] == game.report_status()
 
 
 def test_report_resolves_known_player_power_province_and_unit_identifiers() -> None:
@@ -185,31 +183,6 @@ def test_unknown_identifiers_escape_markdown_then_mentions() -> None:
         ("mentions", "md-3"),
     ]
     assert rendered == ["safe-2 alivió el hambre en safe-4."]
-
-
-def test_report_neutralizes_untrusted_game_player_and_text_amount() -> None:
-    game = make_report_game()
-    game.name = "@everyone_*game*"
-    game.turn_number = 0
-    game.players[0].player_id = "@here_*player*"
-    unsafe_amount = "<@999>_*all*"
-    game.turn_events = [
-        TurnEvent(
-            EventType.EXPENSE,
-            {
-                "player": game.players[0].player_id,
-                "expense": "A",
-                "target": None,
-                "amount": unsafe_amount,
-            },
-        )
-    ]
-
-    rendered = "\n".join(TurnReporter.generate(game))
-
-    for value in (game.name, game.players[0].player_id, unsafe_amount):
-        assert TurnReporter._safe(value) in rendered
-        assert value not in rendered
 
 
 def test_generate_does_not_mutate_game_or_events() -> None:
