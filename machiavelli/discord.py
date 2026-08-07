@@ -429,7 +429,7 @@ async def add_player(
     except GameNotFoundException:
         await interaction.followup.send(
             "**Error:** No hay ninguna partida activa en este canal.\n"
-            "Crea una primero usando `/sharcashvelli_admin create`."
+            "Crea una primero usando `/shar create`."
         )
     except DuplicatePlayerException:
         await interaction.followup.send(
@@ -754,7 +754,7 @@ async def game_status(interaction: discord.Interaction):
     except GameNotFoundException:
         await interaction.followup.send(
             "**Error:** No hay ninguna partida activa en este canal.\n"
-            "Crea una primero usando `/sharcashvelli_admin create`."
+            "Crea una primero usando `/shar create`."
         )
     except Exception as error:
         await interaction.followup.send(
