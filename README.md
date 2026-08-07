@@ -152,35 +152,34 @@ Se prevén las siguientes versiones
 
 ### Versión 0.6.0
 
-- [ ] Ampliación de GameEngine para soportar las operaciones que los jugadores vayan incorporando a sus órdenes.
+- [X] Ampliación de GameEngine para soportar las operaciones que los jugadores vayan incorporando a sus órdenes.
   - [X] SetupManager, para el setup inicial de la partida (antes en Game)
-- [ ] Reescritura y refactorización de prácticamente todo el código.
+- [X] Reescritura y refactorización de prácticamente todo el código.
   - [X] Creación del package db, para la gestión de la base de datos.
-  - [ ] Creación del package repositories, encargado de la persistencia de los elementos del juego.
+  - [X] Creación del package repositories, encargado de la persistencia de los elementos del juego.
     - [X] CommandRepository
     - [X] PlayerRepository
-    - [ ] GameRepository
-  - [ ] Creación del package services, para servicios varios.
+    - [X] GameRepository
+  - [X] Creación del package services, para servicios varios.
     - [X] Clases de autocompletar comandos de Discord.
-    - [ ] DiscordManager.
-    - [ ] Clases para generar el reporte de los distintos objetos.
+    - [X] GameService, para exponer las operaciones sobre la partida a distintos interfaces.
+    - [X] Clases para generar el reporte de los distintos objetos.
       - [X] CommandReporter
       - [X] PlayerReporter
-      - [ ] GameReporter
-  - [ ] Creación del package game, responsable de las clases de dominio del juego.
+      - [X] TurnReporter
+  - [X] Creación del package game, responsable de las clases de dominio del juego.
     - [X] GameTables
     - [X] Map
     - [X] Scenario
     - [X] Command
     - [X] Player
-    - [ ] Game
-    - [ ] Events
-  - [ ] Ampliación de GameEngine para soportar las operaciones que los jugadores vayan incorporando a sus órdenes.
-    - [ ] SetupManager, para el setup inicial de la partida (antes en Game)
-    - [ ] MaintenanceManager, para los turnos de mantenimiento (antes en Game)
-    - [ ] MilitaryResolver, completar con el resto de acciones (hasta ahora, solo Hold, Advance y Conversion)
-    - [ ] Gestor de conflictos (sin nombre aún)
-    - [ ] Gestor de retiradas.
+    - [X] Game
+    - [X] Events
+  - [X] Ampliación de GameEngine para soportar las operaciones que los jugadores vayan incorporando a sus órdenes.
+    - [X] SetupManager, para el setup inicial de la partida (antes en Game)
+    - [X] MaintenanceManager, para los turnos de mantenimiento (antes en Game)
+    - [X] MilitaryResolver, completado con el resto de acciones y gestión de conflictos.
+    - [X] RetreatManager, para gestionar las retiradas.
 
 ### Desarrollos futuros
 
@@ -238,4 +237,10 @@ Cambios que afectan a los comandos del bot. Los cambios se irán incorporando a 
   distintos componentes (gestores de Desastres, de Control, de Gastos, de Rebeliones, de Sobornos, Militares, etc) y
   que está prácticamente terminado, pero le quedan las partes más complejas (TRANSPORTE y, sobre todo, CONFLICTOS).
 - Versión 0.5.1: `/mach game_status` devuelve ahora un mensaje privado.
+- Versión 0.5.2: todos los comandos `/mach` (de jugador) devuelven un mensaje privado, y todos los comandos `/shar`
+  (de administrador) devuelven un mensaje público.
+- Versión 0.6.0: refactorización y reescritura de buena parte del código. Se ha completado el módulo de engine con la
+  resolución de conflictos militares, y las retiradas; se comprueban las reglas activas; nuevos servicios de Reporter
+  para separar el reporte de la lógica del juego; el módulo de discord se ha simplificado y apartado de allí la lógica
+  del juego y de la base de datos; se ha mejorado la gestión de eventos y la generación de reportes, etc.
   
