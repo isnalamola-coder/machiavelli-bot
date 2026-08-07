@@ -287,9 +287,20 @@ class TestHomeCountryControlGains(unittest.TestCase):
         self.hc_milan = Mock()
         self.hc_milan.provinces = ["milan", "pavia"]
 
+        self.hc_fortress = Mock()
+        self.hc_fortress.provinces = ["keep"]
+
         self.mock_game.scenario.home_countries = {
             "L": self.hc_florence,
             "M": self.hc_milan,
+            "K": self.hc_fortress,
+        }
+        self.mock_game.map.provinces = {
+            "flore": Mock(city="city"),
+            "pisa": Mock(city=None),
+            "milan": Mock(city="fortified"),
+            "pavia": Mock(city=None),
+            "keep": Mock(city="fortress"),
         }
 
         # Mock del jugador
@@ -321,6 +332,14 @@ class TestHomeCountryControlGains(unittest.TestCase):
         self.manager.home_country_control_gains(self.player)
 
         self.assertNotIn("L", self.player.home_countries)
+        self.mock_game.add_event.assert_not_called()
+
+    def test_home_country_control_gains_ignores_fortress_only_country(self):
+        self.player.controlled_locations = ["keep"]
+
+        self.manager.home_country_control_gains(self.player)
+
+        self.assertEqual(self.player.home_countries, [])
         self.mock_game.add_event.assert_not_called()
 
     def test_home_country_control_already_owned(self):
@@ -420,6 +439,34 @@ class TestCheckPlayerStatus(unittest.TestCase):
         self.manager.check_player_status(self.player)
 
         self.mock_game.add_event.assert_not_called()
+
+
+class TestFortressControlCharacterization(unittest.TestCase):
+    def setUp(self):
+        self.game = Mock()
+        self.game.map.provinces = {"keep": Mock(city="fortress")}
+        self.game.scenario.home_countries = {
+            "M": Mock(provinces=["keep"]),
+        }
+        self.game.scenario.victory_conditions = Mock(cities=1, home_countries=1)
+        self.player = Mock(
+            player_id="MILAN",
+            home_countries=["M"],
+            controlled_locations=["keep"],
+        )
+        self.manager = ControlManager(self.game)
+
+    def test_fortress_does_not_preserve_home_country_control(self):
+        self.manager.home_country_control_loses(self.player)
+
+        self.assertEqual(self.player.home_countries, [])
+        event = self.game.add_event.call_args.args[0]
+        self.assertEqual(event.type, EventType.LOSE_HOME_COUNTRY)
+
+    def test_fortress_does_not_count_towards_victory(self):
+        self.manager.check_player_status(self.player)
+
+        self.game.add_event.assert_not_called()
 
 
 class TestControlManagerRun(unittest.TestCase):
