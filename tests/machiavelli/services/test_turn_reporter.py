@@ -1,0 +1,338 @@
+"""Tests for readable, context-aware turn reporting."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from unittest.mock import patch
+
+import pytest
+
+from machiavelli.events import EventType, JSONValue, TurnEvent
+from machiavelli.game.game import Game
+from machiavelli.game.map import Map
+from machiavelli.game.scenario import Scenario
+from machiavelli.services.turn_reporter import TurnReporter
+
+
+def make_report_game() -> Game:
+    """Build a loaded game with known public identifiers."""
+    scenario = Scenario.load_scenarios()["Be"]
+    game = Game(
+        name="Partida de prueba",
+        channel_id=123,
+        scenario_id="Be",
+        scenario=scenario,
+        map=Map.load_map(exclude_ids=scenario.excluded_locations),
+        turn_number=2,
+    )
+    first = game.add_player("player-1", 123)
+    first.power = "M"
+    second = game.add_player("player-2", 456)
+    second.power = "V"
+    return game
+
+
+def event_lines(report: list[str]) -> list[str]:
+    """Return only the lines produced from turn events."""
+    situation_index = report.index("## 🗺️ REPORTE DE SITUACIÓN")
+    return report[3:situation_index]
+
+
+@pytest.mark.parametrize("event_type", list(EventType))
+def test_every_event_type_has_a_non_empty_spanish_representation(
+    event_type: EventType,
+    valid_event_payloads: Mapping[EventType, dict[str, JSONValue]],
+) -> None:
+    game = make_report_game()
+    event = TurnEvent(event_type, valid_event_payloads[event_type])
+    game.turn_events = [event]
+
+    report = TurnReporter.generate(game)
+    rendered = event_lines(report)
+
+    assert rendered
+    assert all(line.strip() for line in report)
+    assert event_type.value not in "\n".join(rendered)
+    assert event.to_json() not in "\n".join(report)
+    assert "TurnEvent" not in "\n".join(report)
+    assert "mappingproxy" not in "\n".join(report)
+
+
+def test_report_preserves_general_order_event_order_and_repetitions() -> None:
+    game = make_report_game()
+    repeated = TurnEvent(EventType.START_GAME, {"scenario": "Be"})
+    eliminated = TurnEvent(EventType.PLAYER_ELIMINATED, {"player": "player-2"})
+    game.turn_events = [repeated, eliminated, repeated]
+
+    report = TurnReporter.generate(game)
+    rendered = event_lines(report)
+
+    assert report[:3] == [
+        "## 📜 Partida de prueba, turno 2",
+        "### 🗓️ Primavera (campaña) de 1454",
+        "> ⚠️ **EVENTOS DEL TURNO ANTERIOR**",
+    ]
+    assert rendered == [
+        "Se inició la partida con el escenario Be.",
+        "<@456> fue eliminado de la partida.",
+        "Se inició la partida con el escenario Be.",
+    ]
+    situation_index = report.index("## 🗺️ REPORTE DE SITUACIÓN")
+    assert report[situation_index + 1 :] == game.report_status()
+
+
+def test_report_resolves_known_player_power_province_and_unit_identifiers() -> None:
+    game = make_report_game()
+    game.turn_events = [
+        TurnEvent(
+            EventType.START_GAME_POWER_ASSIGNED,
+            {"player_id": "player-1", "discord_id": 123, "power_id": "M"},
+        ),
+        TurnEvent(
+            EventType.FAMINE_RELIEF,
+            {"player": "player-1", "province": "milan"},
+        ),
+        TurnEvent(
+            EventType.FAMINE_ATTRITION,
+            {"player": "player-2", "units": ["F venic S"]},
+        ),
+    ]
+
+    rendered = "\n".join(event_lines(TurnReporter.generate(game)))
+
+    assert "<@123>" in rendered
+    assert "<@456>" in rendered
+    assert "Milan" in rendered
+    assert "Flota" in rendered
+    assert "Venice (S)" in rendered
+
+
+@pytest.mark.parametrize(
+    ("persisted_discord_id", "expected_player"),
+    [(999, "<@999>"), (None, "<@123>")],
+)
+def test_power_assignment_prefers_persisted_discord_id_with_safe_fallback(
+    persisted_discord_id: int | None,
+    expected_player: str,
+) -> None:
+    game = make_report_game()
+    game.turn_events = [
+        TurnEvent(
+            EventType.START_GAME_POWER_ASSIGNED,
+            {
+                "player_id": "player-1",
+                "discord_id": persisted_discord_id,
+                "power_id": "M",
+            },
+        )
+    ]
+
+    assert event_lines(TurnReporter.generate(game)) == [
+        f"{expected_player} recibió la potencia Milan."
+    ]
+
+
+def test_power_expense_resolves_its_target_as_a_power() -> None:
+    game = make_report_game()
+    game.turn_events = [
+        TurnEvent(
+            EventType.EXPENSE,
+            {"player": "player-1", "expense": "E", "target": "V", "amount": 12},
+        )
+    ]
+
+    assert event_lines(TurnReporter.generate(game)) == [
+        "<@123> registró Ordenar asesinato sobre Venice por 12 ducados."
+    ]
+
+
+def test_unknown_identifiers_escape_markdown_then_mentions() -> None:
+    game = make_report_game()
+    unknown_player = "@everyone_*`|\\"
+    unknown_province = "<@123>_**"
+    game.turn_events = [
+        TurnEvent(
+            EventType.FAMINE_RELIEF,
+            {"player": unknown_player, "province": unknown_province},
+        )
+    ]
+    calls: list[tuple[object, ...]] = []
+
+    def fake_markdown(value: str, *, as_needed: bool) -> str:
+        calls.append(("markdown", value, as_needed))
+        return f"md-{len(calls)}"
+
+    def fake_mentions(value: str) -> str:
+        calls.append(("mentions", value))
+        return f"safe-{len(calls)}"
+
+    with (
+        patch(
+            "machiavelli.services.turn_reporter.escape_markdown",
+            side_effect=fake_markdown,
+        ),
+        patch(
+            "machiavelli.services.turn_reporter.escape_mentions",
+            side_effect=fake_mentions,
+        ),
+    ):
+        rendered = TurnReporter._render_event(game, game.turn_events[0])
+
+    assert calls == [
+        ("markdown", unknown_player, False),
+        ("mentions", "md-1"),
+        ("markdown", unknown_province, False),
+        ("mentions", "md-3"),
+    ]
+    assert rendered == ["safe-2 alivió el hambre en safe-4."]
+
+
+def test_report_neutralizes_untrusted_game_player_and_text_amount() -> None:
+    game = make_report_game()
+    game.name = "@everyone_*game*"
+    game.turn_number = 0
+    game.players[0].player_id = "@here_*player*"
+    unsafe_amount = "<@999>_*all*"
+    game.turn_events = [
+        TurnEvent(
+            EventType.EXPENSE,
+            {
+                "player": game.players[0].player_id,
+                "expense": "A",
+                "target": None,
+                "amount": unsafe_amount,
+            },
+        )
+    ]
+
+    rendered = "\n".join(TurnReporter.generate(game))
+
+    for value in (game.name, game.players[0].player_id, unsafe_amount):
+        assert TurnReporter._safe(value) in rendered
+        assert value not in rendered
+
+
+def test_generate_does_not_mutate_game_or_events() -> None:
+    game = make_report_game()
+    game.famine = ["milan"]
+    game.turn_events = [
+        TurnEvent(EventType.FAMINE_END, {"provinces": ["milan"]}),
+        TurnEvent(EventType.FAMINE_END, {"provinces": ["venic"]}),
+    ]
+    event_snapshot = [(id(event), event.to_json()) for event in game.turn_events]
+    player_snapshot = [
+        (
+            player.player_id,
+            player.power,
+            tuple(player.controlled_locations),
+            tuple(player.commands),
+        )
+        for player in game.players
+    ]
+    famine_snapshot = tuple(game.famine)
+
+    TurnReporter.generate(game)
+
+    current_events = [(id(event), event.to_json()) for event in game.turn_events]
+    assert current_events == event_snapshot
+    assert [
+        (
+            player.player_id,
+            player.power,
+            tuple(player.controlled_locations),
+            tuple(player.commands),
+        )
+        for player in game.players
+    ] == player_snapshot
+    assert tuple(game.famine) == famine_snapshot
+
+
+def test_military_resolution_renders_every_item_in_group_order() -> None:
+    game = make_report_game()
+    game.turn_events = [
+        TurnEvent(
+            EventType.MILITARY_RESOLUTION,
+            {
+                "outcomes": [
+                    [["player-1", "F", "venic S"], "G", "milan", False],
+                    [["player-2", "A", "pavia"], "A", None, True],
+                ],
+                "cancelled_orders": [["player-2", "A", "pavia"]],
+                "broken_convoys": [[None, "G", "milan"]],
+                "dislodgements": [["player-2", "F", "venic S"]],
+                "rebellions": [["player-1", "city", "venic", "liberated"]],
+                "sieges": [[["player-2", "A", "pavia"], "milan", "completed"]],
+            },
+        )
+    ]
+
+    rendered = event_lines(TurnReporter.generate(game))
+
+    assert rendered == [
+        "**Resultados militares:**",
+        "- Flota de Venice (S) de <@123> terminó como Guarnición en Milan; "
+        "desalojada: no.",
+        "- Ejército de Pavia de <@456> terminó como Ejército sin destino; "
+        "desalojada: sí.",
+        "**Órdenes canceladas:**",
+        "- Ejército de Pavia de <@456>.",
+        "**Convoyes rotos:**",
+        "- Guarnición independiente de Milan.",
+        "**Desalojos:**",
+        "- Flota de Venice (S) de <@456>.",
+        "**Rebeliones:**",
+        "- Rebelión urbana de Venice para <@123>: liberada.",
+        "**Asedios:**",
+        "- Ejército de Pavia de <@456> en Milan: completado.",
+    ]
+
+
+def test_military_resolution_omits_only_empty_groups() -> None:
+    game = make_report_game()
+    game.turn_events = [
+        TurnEvent(
+            EventType.MILITARY_RESOLUTION,
+            {
+                "outcomes": [[["player-1", "A", "milan"], "A", "pavia", False]],
+                "cancelled_orders": [],
+                "broken_convoys": [],
+                "dislodgements": [],
+                "rebellions": [],
+                "sieges": [[["player-2", "F", "venic S"], "milan", "started"]],
+            },
+        )
+    ]
+
+    rendered = event_lines(TurnReporter.generate(game))
+
+    assert rendered == [
+        "**Resultados militares:**",
+        "- Ejército de Milan de <@123> terminó como Ejército en Pavia; desalojada: no.",
+        "**Asedios:**",
+        "- Flota de Venice (S) de <@456> en Milan: iniciado.",
+    ]
+    assert not {
+        "**Órdenes canceladas:**",
+        "**Convoyes rotos:**",
+        "**Desalojos:**",
+        "**Rebeliones:**",
+    }.intersection(rendered)
+
+
+def test_empty_military_resolution_has_exactly_one_line() -> None:
+    game = make_report_game()
+    game.turn_events = [
+        TurnEvent(
+            EventType.MILITARY_RESOLUTION,
+            {
+                "outcomes": [],
+                "cancelled_orders": [],
+                "broken_convoys": [],
+                "dislodgements": [],
+                "rebellions": [],
+                "sieges": [],
+            },
+        )
+    ]
+
+    assert event_lines(TurnReporter.generate(game)) == ["Sin cambios militares."]

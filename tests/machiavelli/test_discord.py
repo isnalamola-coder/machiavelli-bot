@@ -41,6 +41,7 @@ from machiavelli.engine.military import (
     MilitaryResolutionError,
     UnresolvedMilitaryConflict,
 )
+from machiavelli.events import InvalidTurnEventError
 from machiavelli.game import (
     DuplicatePlayerException,
     GameNotFoundException,
@@ -331,6 +332,69 @@ class TestReports(unittest.IsolatedAsyncioTestCase):
             ephemeral=True,
         )
 
+    async def test_game_report_translates_invalid_history_privately(self) -> None:
+        interaction = make_interaction()
+        failure = InvalidTurnEventError(row_id=41, event_type="secret_type")
+
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=failure,
+            ),
+            patch("machiavelli.discord.logger.error") as mock_log,
+        ):
+            await game_report.callback(interaction)
+
+        mock_log.assert_called_once_with(
+            "Historial de turno inválido",
+            extra={"row_id": 41, "event_type": "secret_type"},
+        )
+        interaction.followup.send.assert_awaited_once_with(
+            "No se pudo generar el informe porque el historial del turno no es "
+            "válido.\nComunícaselo al administrador para que revise los eventos "
+            "guardados.",
+            ephemeral=True,
+        )
+        message = interaction.followup.send.await_args.args[0]
+        for forbidden in (
+            "InvalidTurnEventError",
+            "secret_type",
+            "41",
+            "Traceback",
+            "{",
+        ):
+            self.assertNotIn(forbidden, message)
+
+    async def test_game_report_logs_unexpected_error_without_leaking_details(
+        self,
+    ) -> None:
+        interaction = make_interaction()
+
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("dato interno"),
+            ),
+            patch("machiavelli.discord.logger.exception") as mock_log,
+        ):
+            await game_report.callback(interaction)
+
+        mock_log.assert_called_once()
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        message = interaction.followup.send.await_args.args[0]
+        self.assertTrue(interaction.followup.send.await_args.kwargs["ephemeral"])
+        for forbidden in (
+            "RuntimeError",
+            "dato interno",
+            "Traceback",
+            "discord.py",
+            "test_discord.py",
+            "line ",
+        ):
+            self.assertNotIn(forbidden, message)
+
     def test_chunk_lines_preserves_order_and_never_exceeds_limit(self) -> None:
         lines = ("a" * 1200, "b" * 1200, "c" * 2100)
 
@@ -379,6 +443,74 @@ class TestRunGame(unittest.IsolatedAsyncioTestCase):
 
         message = interaction.edit_original_response.await_args.kwargs["content"]
         self.assertIn("No hay ninguna partida activa", message)
+        interaction.delete_original_response.assert_not_awaited()
+        interaction.followup.send.assert_not_awaited()
+
+    async def test_run_game_translates_invalid_history_in_deferred_response(
+        self,
+    ) -> None:
+        interaction = make_interaction()
+        failure = InvalidTurnEventError(row_id=73, event_type="hidden_type")
+
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=failure,
+            ),
+            patch("machiavelli.discord.logger.error") as mock_log,
+        ):
+            await run_game.callback(interaction)
+
+        mock_log.assert_called_once_with(
+            "Historial de turno inválido",
+            extra={"row_id": 73, "event_type": "hidden_type"},
+        )
+        message = interaction.edit_original_response.await_args.kwargs["content"]
+        self.assertEqual(
+            message,
+            "No se pudo generar el informe porque el historial del turno no es "
+            "válido.\nComunícaselo al administrador para que revise los eventos "
+            "guardados.",
+        )
+        for forbidden in (
+            "InvalidTurnEventError",
+            "hidden_type",
+            "73",
+            "Traceback",
+            "{",
+        ):
+            self.assertNotIn(forbidden, message)
+        interaction.delete_original_response.assert_not_awaited()
+        interaction.followup.send.assert_not_awaited()
+
+    async def test_run_game_logs_unexpected_error_without_leaking_details(
+        self,
+    ) -> None:
+        interaction = make_interaction()
+
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("dato interno"),
+            ),
+            patch("machiavelli.discord.logger.exception") as mock_log,
+        ):
+            await run_game.callback(interaction)
+
+        mock_log.assert_called_once()
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        message = interaction.edit_original_response.await_args.kwargs["content"]
+        for forbidden in (
+            "RuntimeError",
+            "dato interno",
+            "Traceback",
+            "discord.py",
+            "test_discord.py",
+            "line ",
+        ):
+            self.assertNotIn(forbidden, message)
         interaction.delete_original_response.assert_not_awaited()
         interaction.followup.send.assert_not_awaited()
 

@@ -19,6 +19,7 @@ from machiavelli.engine.military import (
     MilitaryResolutionError,
     UnresolvedMilitaryConflict,
 )
+from machiavelli.events import InvalidTurnEventError
 from machiavelli.game import (
     DuplicatedGameException,
     DuplicatePlayerException,
@@ -31,6 +32,20 @@ from machiavelli.repositories.game_repository import GameRepository
 from machiavelli.services import GameService
 
 logger = logging.getLogger(__name__)
+
+_INVALID_TURN_EVENT_MESSAGE = (
+    "No se pudo generar el informe porque el historial del turno no es válido.\n"
+    "Comunícaselo al administrador para que revise los eventos guardados."
+)
+
+
+def _log_invalid_turn_event(error: InvalidTurnEventError) -> None:
+    """Log only the persisted row context needed for administrative diagnosis."""
+    logger.error(
+        "Historial de turno inválido",
+        extra={"row_id": error.row_id, "event_type": error.event_type},
+    )
+
 
 # Estructura del documento (para orientarme)
 # 1. Grupos de comandos
@@ -702,6 +717,10 @@ async def run_game(interaction: discord.Interaction):
             )
         )
         return
+    except InvalidTurnEventError as error:
+        _log_invalid_turn_event(error)
+        await interaction.edit_original_response(content=_INVALID_TURN_EVENT_MESSAGE)
+        return
     except MilitaryResolutionError as error:
         # El diagnóstico completo queda en logs; el usuario recibe orientación segura.
         logger.exception(
@@ -710,10 +729,13 @@ async def run_game(interaction: discord.Interaction):
         )
         await interaction.edit_original_response(content=_military_error_message(error))
         return
-    except Exception as error:
-        error_detallado = format_error_with_location(error)
+    except Exception:
+        logger.exception("Error inesperado al ejecutar el turno")
         await interaction.edit_original_response(
-            content=f"**Error inesperado al ejecutar el turno:** {error_detallado}."
+            content=(
+                "**Error inesperado al ejecutar el turno:** No se pudo completar "
+                "la operación. Comunícaselo al administrador."
+            )
         )
         return
 
@@ -783,10 +805,17 @@ async def game_report(interaction: discord.Interaction):
             "**Error:** No hay ninguna partida activa en este canal.",
             ephemeral=True,
         )
-    except Exception as error:
+    except InvalidTurnEventError as error:
+        _log_invalid_turn_event(error)
         await interaction.followup.send(
-            "**Error inesperado al mostrar el informe:** "
-            f"`{type(error).__name__}: {error}`.",
+            _INVALID_TURN_EVENT_MESSAGE,
+            ephemeral=True,
+        )
+    except Exception:
+        logger.exception("Error inesperado al mostrar el informe")
+        await interaction.followup.send(
+            "**Error inesperado al mostrar el informe:** No se pudo completar la "
+            "operación. Comunícaselo al administrador.",
             ephemeral=True,
         )
 

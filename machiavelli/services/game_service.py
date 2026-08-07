@@ -18,6 +18,8 @@ from machiavelli.game.map import Map
 from machiavelli.game.scenario import Scenario
 from machiavelli.repositories.game_repository import GameRepository
 
+from .turn_reporter import TurnReporter
+
 type PlayerInfo = tuple[str, int | None]
 type ActorOption = tuple[str, str]
 type GameStatusDict = dict[str, Any]
@@ -165,7 +167,7 @@ class GameService:
 
     def get_turn_report(self, channel_id: int) -> list[str]:
         """Return the persisted report for the latest turn."""
-        return self.get_game(channel_id).turn_report()
+        return TurnReporter.generate(self.get_game(channel_id))
 
     def get_player_commands(
         self,
@@ -186,7 +188,7 @@ class GameService:
         """Execute one turn, then persist the resulting aggregate atomically."""
         game = self.get_game(channel_id)
         GameEngine(game).run()
-        report_lines = game.turn_report()
+        report_lines = TurnReporter.generate(game)
         self.repo.save(game)
         return report_lines
 
