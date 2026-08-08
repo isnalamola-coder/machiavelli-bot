@@ -39,6 +39,47 @@ class TradeResource:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class ExchangeProposal:
+    """Represent one pending bilateral exchange proposal."""
+
+    proposer_power: str
+    counterparty_power: str
+    give: TradeResource
+    receive: TradeResource
+
+    def __post_init__(self) -> None:
+        if self.proposer_power == self.counterparty_power:
+            raise TradeRuleException(
+                "La facción de destino no está asignada a otro jugador de esta partida."
+            )
+
+    @property
+    def pair_key(self) -> tuple[str, str]:
+        power_a, power_b = sorted((self.proposer_power, self.counterparty_power))
+        return power_a, power_b
+
+    def is_exact_inverse(self, other: ExchangeProposal) -> bool:
+        """Return whether another proposal exactly reverses this one."""
+        return (
+            self.proposer_power == other.counterparty_power
+            and self.counterparty_power == other.proposer_power
+            and self.give == other.receive
+            and self.receive == other.give
+        )
+
+
+def find_exchange_proposal_index(
+    proposals: list[ExchangeProposal], pair_key: tuple[str, str]
+) -> int | None:
+    """Find the first pending proposal for one unordered power pair."""
+    # ponytail: O(n) para 21 parejas de carga objetivo; añadir índice si cambia la escala  # noqa: E501
+    for index, proposal in enumerate(proposals):
+        if proposal.pair_key == pair_key:
+            return index
+    return None
+
+
 def parse_trade_resource(
     scenario: Scenario,
     kind: str,

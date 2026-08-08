@@ -9,7 +9,9 @@ from machiavelli.game.game import Game
 from machiavelli.game.player import Player
 from machiavelli.game.scenario import Scenario
 from machiavelli.game.trading import (
+    ExchangeProposal,
     TradeResource,
+    find_exchange_proposal_index,
     parse_trade_resource,
     player_has_trade_resource,
     transfer_trade_resource,
@@ -175,3 +177,62 @@ def test_transfer_rejects_insufficient_resources_without_mutation(
         receiver.ducats,
         receiver.ass_counters,
     ) == before
+
+
+def test_exchange_proposal_is_immutable_and_canonicalizes_pair() -> None:
+    proposal = ExchangeProposal(
+        "N", "L", TradeResource("ducats", 9), TradeResource("assassin", "V")
+    )
+
+    assert proposal.pair_key == ("L", "N")
+    with pytest.raises(AttributeError):
+        proposal.proposer_power = "M"  # type: ignore[misc]
+
+    with pytest.raises(
+        TradeRuleException,
+        match=(
+            "^La facción de destino no está asignada a otro jugador de esta partida\\.$"
+        ),
+    ):
+        ExchangeProposal(
+            "N", "N", TradeResource("ducats", 1), TradeResource("ducats", 1)
+        )
+
+
+@pytest.mark.parametrize(
+    ("give", "receive"),
+    [
+        (TradeResource("ducats", 9), TradeResource("ducats", 4)),
+        (TradeResource("assassin", "V"), TradeResource("assassin", "M")),
+    ],
+)
+def test_exchange_proposal_inverse_requires_opposite_direction_and_exact_resources(
+    give: TradeResource, receive: TradeResource
+) -> None:
+    proposal = ExchangeProposal("N", "L", give, receive)
+    inverse = ExchangeProposal("L", "N", receive, give)
+
+    assert inverse.is_exact_inverse(proposal)
+    assert proposal.is_exact_inverse(inverse)
+    assert not proposal.is_exact_inverse(ExchangeProposal("N", "L", receive, give))
+    assert not proposal.is_exact_inverse(ExchangeProposal("L", "N", give, receive))
+    assert not proposal.is_exact_inverse(
+        ExchangeProposal(
+            "L",
+            "N",
+            TradeResource(give.kind, 1 if give.kind == "ducats" else "M"),
+            receive,
+        )
+    )
+
+
+def test_find_exchange_proposal_index_returns_first_matching_pair() -> None:
+    first = ExchangeProposal(
+        "N", "L", TradeResource("ducats", 1), TradeResource("ducats", 2)
+    )
+    second = ExchangeProposal(
+        "M", "V", TradeResource("ducats", 3), TradeResource("ducats", 4)
+    )
+
+    assert find_exchange_proposal_index([first, second, first], ("L", "N")) == 0
+    assert find_exchange_proposal_index([first, second], ("F", "N")) is None

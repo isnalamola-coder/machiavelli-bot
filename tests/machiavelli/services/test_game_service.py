@@ -28,6 +28,7 @@ from machiavelli.game import Player as PublicPlayer
 from machiavelli.game.command import Command
 from machiavelli.game.game import Game
 from machiavelli.game.player import Player
+from machiavelli.game.trading import ExchangeProposal, TradeResource
 from machiavelli.repositories.game_repository import GameRepository
 from machiavelli.services import GameService, game_service_session
 
@@ -485,6 +486,18 @@ def test_give_resource_save_failure_is_rolled_back_after_reload() -> None:
             "La facción de destino no está asignada a otro jugador de esta partida.",
         ),
         (
+            "ZZ",
+            "ducats",
+            "1",
+            "La facción de destino no está asignada a otro jugador de esta partida.",
+        ),
+        (
+            "M",
+            "ducats",
+            "1",
+            "La facción de destino no está asignada a otro jugador de esta partida.",
+        ),
+        (
             "L",
             "ducats",
             "0",
@@ -524,17 +537,60 @@ def test_give_resource_requires_assigned_actor_power() -> None:
         game.players[0].power = None
         service.repo.save(game)
 
-        with pytest.raises(
-            PlayerNotFoundException,
-            match="^Tu cuenta no tiene una facción asignada en esta partida\\.$",
+        with patch.object(service.repo, "save") as save:
+            with pytest.raises(
+                PlayerNotFoundException,
+                match="^Tu cuenta no tiene una facción asignada en esta partida\\.$",
+            ):
+                service.give_resource(
+                    7106,
+                    1,
+                    give_to="L",
+                    give_type="ducats",
+                    give_value="1",
+                )
+            with pytest.raises(PlayerNotFoundException):
+                service.give_resource(
+                    7106,
+                    999,
+                    give_to="L",
+                    give_type="ducats",
+                    give_value="1",
+                )
+        save.assert_not_called()
+    finally:
+        conn.close()
+
+
+def test_give_resource_rejects_disabled_assassinations_without_save() -> None:
+    conn, service = make_trade_service(channel_id=7109)
+    try:
+        game = service.get_game(7109)
+        scenario = game.require_scenario()
+        scenario.rules.assassinations_active = False
+
+        with (
+            patch(
+                "machiavelli.services.game_service.Scenario.load_scenarios",
+                return_value={"Be": scenario},
+            ),
+            patch.object(service.repo, "save") as save,
         ):
-            service.give_resource(
-                7106,
-                1,
-                give_to="L",
-                give_type="ducats",
-                give_value="1",
-            )
+            with pytest.raises(
+                TradeRuleException,
+                match=(
+                    "^Las fichas de asesinato no están disponibles en este "
+                    "escenario\\.$"
+                ),
+            ):
+                service.give_resource(
+                    7109,
+                    1,
+                    give_to="L",
+                    give_type="assassin",
+                    give_value="V",
+                )
+        save.assert_not_called()
     finally:
         conn.close()
 
@@ -559,10 +615,30 @@ def test_give_resource_logs_only_private_pair_metadata(
             if getattr(record, "operation", None) == "trade_give"
         )
         assert record.game_id == service.get_game(7107).database_id
+        assert record.operation == "trade_give"
         assert record.power_a == "L"
         assert record.power_b == "N"
+        assert {
+            key: getattr(record, key)
+            for key in ("game_id", "operation", "power_a", "power_b")
+        } == {
+            "game_id": record.game_id,
+            "operation": "trade_give",
+            "power_a": "L",
+            "power_b": "N",
+        }
+        for private_field in (
+            "discord_id",
+            "amount",
+            "value",
+            "give_value",
+            "resource",
+            "target",
+            "assassin_target",
+        ):
+            assert not hasattr(record, private_field)
         assert "V" not in record.getMessage()
-        assert "654" not in record.getMessage()
+        assert "1" not in record.getMessage()
     finally:
         conn.close()
 
@@ -632,4 +708,262 @@ def test_concurrent_gives_load_sequentially_before_second_operation() -> None:
         assert loaded.players[1].ducats == 2
     finally:
         release_first.set() if "release_first" in locals() else None
+        conn.close()
+
+
+def make_proposal(
+    proposer: str = "N",
+    counterparty: str = "L",
+    give: TradeResource | None = None,
+    receive: TradeResource | None = None,
+) -> ExchangeProposal:
+    return ExchangeProposal(
+        proposer,
+        counterparty,
+        give or TradeResource("ducats", 9),
+        receive or TradeResource("assassin", "V"),
+    )
+
+
+def test_exchange_helpers_store_replace_and_cancel_without_moving_resources(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    conn, service = make_trade_service(channel_id=7110)
+    try:
+        with caplog.at_level(logging.INFO, logger="machiavelli.services.game_service"):
+            game = service.get_game(7110)
+            actor, _actor_power, _counterparty, _counterparty_power = (
+                service._resolve_trade_parties(game, 1, "L")
+            )
+            proposal = make_proposal()
+            before = [
+                (player.ducats, player.ass_counters[:]) for player in game.players
+            ]
+            assert service._store_pending_exchange(game, actor, proposal, None) == (
+                "Intercambio propuesto a Florence: das 9 ducados y pides "
+                "una ficha de asesinato contra Venice."
+            )
+
+            stored = service.get_game(7110)
+            assert stored.pending_exchanges == [proposal]
+            assert [
+                (player.ducats, player.ass_counters) for player in stored.players
+            ] == before
+
+            other = make_proposal(
+                "N", "M", TradeResource("ducats", 2), TradeResource("ducats", 1)
+            )
+            game = service.get_game(7110)
+            actor, _, _, _ = service._resolve_trade_parties(game, 1, "L")
+            game.pending_exchanges.append(other)
+            service.repo.save(game)
+
+            replacement = make_proposal(
+                "N", "L", TradeResource("ducats", 3), TradeResource("ducats", 4)
+            )
+            game = service.get_game(7110)
+            actor, _, _, _ = service._resolve_trade_parties(game, 1, "L")
+            assert service._store_pending_exchange(game, actor, replacement, 0) == (
+                "Has sustituido el intercambio pendiente con Florence: das 3 ducados "
+                "y pides 4 ducados."
+            )
+            assert service.get_game(7110).pending_exchanges == [replacement, other]
+
+            cancel_game = service.get_game(7110)
+            _, cancel_actor_power, _, cancel_counterparty_power = (
+                service._resolve_trade_parties(cancel_game, 1, "L")
+            )
+            with patch.object(service.repo, "save", wraps=service.repo.save) as save:
+                assert (
+                    service._cancel_pending_exchange(
+                        cancel_game, cancel_actor_power, cancel_counterparty_power
+                    )
+                    == "Intercambio pendiente con Florence cancelado."
+                )
+            save.assert_called_once_with(cancel_game)
+            assert service.get_game(7110).pending_exchanges == [other]
+
+            noop_game = service.get_game(7110)
+            _, noop_actor_power, _, noop_counterparty_power = (
+                service._resolve_trade_parties(noop_game, 1, "L")
+            )
+            with patch.object(service.repo, "save") as save:
+                assert (
+                    service._cancel_pending_exchange(
+                        noop_game, noop_actor_power, noop_counterparty_power
+                    )
+                    == "No había ningún intercambio pendiente con Florence."
+                )
+            save.assert_not_called()
+
+        operations = {
+            record.operation: record
+            for record in caplog.records
+            if getattr(record, "operation", None)
+            in {
+                "exchange_proposed",
+                "exchange_replaced",
+                "exchange_cancelled",
+                "exchange_cancel_noop",
+            }
+        }
+        for operation in (
+            "exchange_proposed",
+            "exchange_replaced",
+            "exchange_cancelled",
+            "exchange_cancel_noop",
+        ):
+            record = operations[operation]
+            assert {
+                key: getattr(record, key)
+                for key in ("game_id", "operation", "power_a", "power_b")
+            } == {
+                "game_id": stored.database_id,
+                "operation": operation,
+                "power_a": "L",
+                "power_b": "N",
+            }
+    finally:
+        conn.close()
+
+
+def test_store_exchange_requires_actor_ownership_and_keeps_existing_row() -> None:
+    conn, service = make_trade_service(channel_id=7111)
+    try:
+        game = service.get_game(7111)
+        actor, _, _, _ = service._resolve_trade_parties(game, 1, "L")
+        existing = make_proposal()
+        service._store_pending_exchange(game, actor, existing, None)
+        game = service.get_game(7111)
+        actor, _, _, _ = service._resolve_trade_parties(game, 1, "L")
+        actor.ducats = 0
+        replacement = make_proposal(
+            "N", "L", TradeResource("ducats", 3), TradeResource("ducats", 4)
+        )
+
+        with patch.object(service.repo, "save") as save:
+            with pytest.raises(
+                TradeRuleException,
+                match="^No tienes suficientes ducados\\.$",
+            ):
+                service._store_pending_exchange(game, actor, replacement, 0)
+        save.assert_not_called()
+        assert service.get_game(7111).pending_exchanges == [existing]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("operation", ["create", "replace", "cancel"])
+def test_exchange_helper_save_failures_preserve_reloaded_state(operation: str) -> None:
+    conn, service = make_trade_service(channel_id=7112)
+    try:
+        before_resources = [
+            (player.ducats, player.ass_counters[:])
+            for player in service.get_game(7112).players
+        ]
+        if operation == "create":
+            conn.execute(
+                """
+                CREATE TRIGGER fail_exchange_insert
+                BEFORE INSERT ON exchange_proposals
+                BEGIN SELECT RAISE(ABORT, 'forced exchange failure'); END
+                """
+            )
+            game = service.get_game(7112)
+            actor, _, _, _ = service._resolve_trade_parties(game, 1, "L")
+            with pytest.raises(sqlite3.IntegrityError):
+                service._store_pending_exchange(game, actor, make_proposal(), None)
+        else:
+            game = service.get_game(7112)
+            actor, _, _, _ = service._resolve_trade_parties(game, 1, "L")
+            existing = make_proposal()
+            service._store_pending_exchange(game, actor, existing, None)
+            if operation == "replace":
+                conn.execute(
+                    """
+                    CREATE TRIGGER fail_exchange_insert
+                    BEFORE INSERT ON exchange_proposals
+                    BEGIN SELECT RAISE(ABORT, 'forced exchange failure'); END
+                    """
+                )
+                replacement = make_proposal(
+                    "N", "L", TradeResource("ducats", 3), TradeResource("ducats", 4)
+                )
+                game = service.get_game(7112)
+                actor, _, _, _ = service._resolve_trade_parties(game, 1, "L")
+                with pytest.raises(sqlite3.IntegrityError):
+                    service._store_pending_exchange(game, actor, replacement, 0)
+            else:
+                conn.execute(
+                    """
+                    CREATE TRIGGER fail_exchange_delete
+                    BEFORE DELETE ON exchange_proposals
+                    BEGIN SELECT RAISE(ABORT, 'forced exchange failure'); END
+                    """
+                )
+                game = service.get_game(7112)
+                _, actor_power, _, counterparty_power = service._resolve_trade_parties(
+                    game, 1, "L"
+                )
+                with pytest.raises(sqlite3.IntegrityError):
+                    service._cancel_pending_exchange(
+                        game, actor_power, counterparty_power
+                    )
+        restored = service.get_game(7112)
+        expected_proposals = [] if operation == "create" else [existing]
+        assert restored.pending_exchanges == expected_proposals
+        assert [
+            (player.ducats, player.ass_counters) for player in restored.players
+        ] == before_resources
+    finally:
+        conn.close()
+
+
+def test_run_turn_expires_exchanges_and_save_failure_preserves_previous_state() -> None:
+    conn, service = make_trade_service(channel_id=7113)
+    try:
+        game = service.get_game(7113)
+        actor, _, _, _ = service._resolve_trade_parties(game, 1, "L")
+        service._store_pending_exchange(game, actor, make_proposal(), None)
+
+        with (
+            patch("machiavelli.services.game_service.GameEngine") as engine,
+            patch(
+                "machiavelli.services.game_service.TurnReporter.generate",
+                return_value=[],
+            ),
+        ):
+            engine.return_value.run.side_effect = lambda: engine.call_args.args[
+                0
+            ].advance_turn()
+            assert service.run_turn(7113) == []
+        assert service.get_game(7113).pending_exchanges == []
+
+        game = service.get_game(7113)
+        actor, _, _, _ = service._resolve_trade_parties(game, 1, "L")
+        service._store_pending_exchange(game, actor, make_proposal(), None)
+        conn.execute(
+            """
+            CREATE TRIGGER fail_turn_update
+            BEFORE UPDATE ON games
+            BEGIN SELECT RAISE(ABORT, 'forced turn failure'); END
+            """
+        )
+        with (
+            patch("machiavelli.services.game_service.GameEngine") as engine,
+            patch(
+                "machiavelli.services.game_service.TurnReporter.generate",
+                return_value=[],
+            ),
+            pytest.raises(sqlite3.IntegrityError),
+        ):
+            engine.return_value.run.side_effect = lambda: engine.call_args.args[
+                0
+            ].advance_turn()
+            service.run_turn(7113)
+
+        restored = service.get_game(7113)
+        assert restored.turn_number == 1
+        assert restored.pending_exchanges == [make_proposal()]
+    finally:
         conn.close()

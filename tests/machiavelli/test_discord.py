@@ -59,6 +59,7 @@ from machiavelli.game import (
     PlayerNotFoundException,
     TradeRuleException,
 )
+from machiavelli.game.scenario import Scenario
 from machiavelli.services import game_service_session
 
 
@@ -695,9 +696,13 @@ class TestGiveCommand(unittest.IsolatedAsyncioTestCase):
     async def test_callback_defers_and_uses_one_private_worker(self) -> None:
         interaction = make_interaction()
 
+        async def worker(*_args: object) -> str:
+            interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+            return "done"
+
         with patch(
             "machiavelli.discord.asyncio.to_thread",
-            new=AsyncMock(return_value="done"),
+            new=AsyncMock(side_effect=worker),
         ) as worker:
             await give.callback(interaction, "L", "ducats", "9")
 
@@ -791,7 +796,7 @@ class TestGiveCommand(unittest.IsolatedAsyncioTestCase):
             "machiavelli.discord.asyncio.to_thread",
             new=AsyncMock(return_value=(("ducats", "Ducados"),)),
         ) as worker:
-            choices = await trade_give_type_autocomplete(interaction, "DUC")
+            choices = await trade_give_type_autocomplete(interaction, "DUCATS")
 
         self.assertEqual(
             [(choice.value, choice.name) for choice in choices], [("ducats", "Ducados")]
@@ -827,6 +832,55 @@ class TestGiveCommand(unittest.IsolatedAsyncioTestCase):
             game_group.db_path,
             interaction.channel_id,
         )
+
+    async def test_trade_autocompletes_use_assigned_powers_and_scenario_rules(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "trading.db")
+            database.upgrade(db_path)
+            _create_game_record(db_path, "Trading", 321)
+            _set_scenario_record(db_path, 321, "Be")
+            _add_player_record(db_path, 321, 654, "P1")
+            _add_player_record(db_path, 321, 655, "P2")
+            _add_player_record(db_path, 321, 656, "P3")
+
+            with game_service_session(db_path) as service:
+                game = service.get_game(321)
+                game.players[0].power = "N"
+                game.players[1].power = "L"
+                service.repo.save(game)
+                expected_targets = set(game.require_scenario().powers)
+
+            interaction = make_interaction()
+            interaction.namespace.give_type = "assassin"
+            with patch.object(game_group, "db_path", db_path):
+                counterparties = await trade_give_to_autocomplete(interaction, "")
+                resource_types = await trade_give_type_autocomplete(interaction, "")
+                targets = await trade_give_value_autocomplete(interaction, "")
+
+            self.assertEqual(
+                [(choice.value, choice.name) for choice in counterparties],
+                [("L", "Florence")],
+            )
+            self.assertEqual(
+                {choice.value for choice in resource_types}, {"ducats", "assassin"}
+            )
+            self.assertEqual({choice.value for choice in targets}, expected_targets)
+            self.assertNotIn("0", {choice.value for choice in targets})
+
+            disabled_scenario = Scenario.load_scenarios()["Be"]
+            disabled_scenario.rules.assassinations_active = False
+            with (
+                patch(
+                    "machiavelli.services.game_service.Scenario.load_scenarios",
+                    return_value={"Be": disabled_scenario},
+                ),
+                patch.object(game_group, "db_path", db_path),
+            ):
+                disabled_types = await trade_give_type_autocomplete(interaction, "")
+
+            self.assertEqual({choice.value for choice in disabled_types}, {"ducats"})
 
 
 if __name__ == "__main__":

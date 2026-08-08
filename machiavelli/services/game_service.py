@@ -24,8 +24,11 @@ from machiavelli.game.map import Map
 from machiavelli.game.scenario import Scenario
 from machiavelli.game.tables import GameTables
 from machiavelli.game.trading import (
+    ExchangeProposal,
     TradeResource,
+    find_exchange_proposal_index,
     parse_trade_resource,
+    player_has_trade_resource,
     transfer_trade_resource,
 )
 from machiavelli.repositories.game_repository import GameRepository
@@ -38,7 +41,7 @@ type ActorOption = tuple[str, str]
 logger = logging.getLogger(__name__)
 
 _trade_mutation_lock = Lock()
-# ponytail: lock global por instancia; usar locks por partida solo si la contención medida lo exige  # noqa: E501
+# ponytail: lock global por instancia; locks por partida si la contención lo exige
 type GameStatusDict = dict[str, Any]
 
 
@@ -514,6 +517,90 @@ class GameService:
                 return f"Has dado a {counterparty} {resource_text}."
             return f"Has dado {resource_text} a {counterparty}."
 
+    def _cancel_pending_exchange(
+        self,
+        game: Game,
+        actor_power: str,
+        counterparty_power: str,
+    ) -> str:
+        """Cancel the pending exchange for one unordered pair."""
+        power_a, power_b = sorted((actor_power, counterparty_power))
+        pair_key = (power_a, power_b)
+        index = find_exchange_proposal_index(game.pending_exchanges, pair_key)
+        counterparty = GameTables.powers[counterparty_power]
+        if index is None:
+            logger.info(
+                "Operación privada de trading",
+                extra={
+                    "game_id": game.database_id,
+                    "operation": "exchange_cancel_noop",
+                    "power_a": power_a,
+                    "power_b": power_b,
+                },
+            )
+            return f"No había ningún intercambio pendiente con {counterparty}."
+
+        game.pending_exchanges.pop(index)
+        self.repo.save(game)
+        logger.info(
+            "Operación privada de trading",
+            extra={
+                "game_id": game.database_id,
+                "operation": "exchange_cancelled",
+                "power_a": power_a,
+                "power_b": power_b,
+            },
+        )
+        return f"Intercambio pendiente con {counterparty} cancelado."
+
+    def _store_pending_exchange(
+        self,
+        game: Game,
+        actor: Player,
+        proposal: ExchangeProposal,
+        existing_index: int | None,
+    ) -> str:
+        """Store or replace one proposal after checking its owner's offer."""
+        if not player_has_trade_resource(actor, proposal.give):
+            if proposal.give.kind == "ducats":
+                raise TradeRuleException("No tienes suficientes ducados.")
+            assert isinstance(proposal.give.value, str)
+            target = GameTables.powers[proposal.give.value]
+            raise TradeRuleException(
+                f"No tienes una ficha de asesinato contra {target}."
+            )
+
+        operation = "exchange_proposed"
+        if existing_index is None:
+            game.pending_exchanges.append(proposal)
+        else:
+            operation = "exchange_replaced"
+            game.pending_exchanges[existing_index] = proposal
+
+        self.repo.save(game)
+        power_a, power_b = proposal.pair_key
+        logger.info(
+            "Operación privada de trading",
+            extra={
+                "game_id": game.database_id,
+                "operation": operation,
+                "power_a": power_a,
+                "power_b": power_b,
+            },
+        )
+        counterparty = GameTables.powers[proposal.counterparty_power]
+        give_text = self._trade_resource_text(proposal.give)
+        receive_text = self._trade_resource_text(proposal.receive)
+        if existing_index is None:
+            return (
+                f"Intercambio propuesto a {counterparty}: das {give_text} y "
+                f"pides {receive_text}."
+            )
+        return (
+            f"Has sustituido el intercambio pendiente con {counterparty}: das "
+            f"{give_text} y pides {receive_text}."
+        )
+
     def get_trade_counterparties(
         self,
         channel_id: int,
@@ -541,7 +628,7 @@ class GameService:
             if scenario.rules.assassinations_active:
                 types.append(("assassin", "Ficha de asesinato"))
             return types
-        except (GameNotFoundException, PlayerNotFoundException):
+        except GameNotFoundException:
             return []
 
     def get_trade_assassin_targets(
@@ -557,5 +644,5 @@ class GameService:
                 (power_code, GameTables.powers[power_code])
                 for power_code in scenario.powers
             ]
-        except (GameNotFoundException, PlayerNotFoundException):
+        except GameNotFoundException:
             return []

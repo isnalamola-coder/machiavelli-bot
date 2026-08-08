@@ -18,6 +18,8 @@ from machiavelli.game.game import (
     GameNotFoundException,
     Player,
 )
+from machiavelli.game.trading import ExchangeProposal, TradeResource
+from machiavelli.repositories.game_repository import GameRepository
 
 
 def test_player_constructor():
@@ -178,7 +180,7 @@ def test_command_order_survives_repeated_loads_and_save_round_trip():
         ),
     }
 
-    assert canonical_database._SCHEMA_VERSION == 4
+    assert canonical_database._SCHEMA_VERSION == 5
     assert len(canonical_database._UPGRADES) == 3
 
     with TemporaryDirectory() as directory:
@@ -217,7 +219,55 @@ def test_command_order_survives_repeated_loads_and_save_round_trip():
             conn.commit()
             after_second_save = Game.load_game(conn, game_id=game.database_id)
             assert command_rows(after_second_save) == expected
-            assert conn.execute("PRAGMA user_version").fetchone() == (4,)
+            assert conn.execute("PRAGMA user_version").fetchone() == (5,)
+
+
+def test_pending_exchanges_are_independent_and_round_trip_without_game_columns():
+    assert Game("A").pending_exchanges is not Game("B").pending_exchanges
+
+    with closing(sqlite3.connect(":memory:")) as conn:
+        database.upgrade_connection(conn)
+        game = Game("Propuesta", scenario_id="Be")
+        player = game.add_player("P1")
+        player.home_countries = []
+        game.add_event(TurnEvent(EventType.PLAYER_ELIMINATED, {"player": "P1"}))
+        game.pending_exchanges = [
+            ExchangeProposal(
+                "X", "Y", TradeResource("ducats", 9), TradeResource("assassin", "V")
+            )
+        ]
+        repository = GameRepository(conn)
+        repository.save(game)
+        conn.commit()
+
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(games)").fetchall()
+        }
+        assert "pending_exchanges" not in columns
+        loaded = repository.get_by_id(game.database_id)
+        assert loaded.pending_exchanges == game.pending_exchanges
+        assert loaded.players[0].home_countries == []
+        assert loaded.turn_events[0].type is EventType.PLAYER_ELIMINATED
+
+
+def test_advance_turn_clears_pending_exchanges_after_player_commands():
+    game = Game("Caducidad", turn_number=2, next_deadline="1454-01-01 00:00")
+    player = Player(game, "P1")
+    player.commands = ["command"]  # type: ignore[list-item]
+    game.players = [player]
+    game.pending_exchanges = [
+        ExchangeProposal(
+            "N", "L", TradeResource("ducats", 1), TradeResource("ducats", 2)
+        )
+    ]
+
+    game.advance_turn()
+
+    assert game.turn_number == 3
+    assert game.next_deadline == "1454-01-08 00:00"
+    assert player.commands == []
+    assert game.pending_exchanges == []
+    assert game.turn_events == []
 
 
 # database on Player
