@@ -967,3 +967,501 @@ def test_run_turn_expires_exchanges_and_save_failure_preserves_previous_state() 
         assert restored.pending_exchanges == [make_proposal()]
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize(
+    (
+        "old_give_type",
+        "old_give_value",
+        "old_receive_type",
+        "old_receive_value",
+        "new_give_type",
+        "new_give_value",
+        "new_receive_type",
+        "new_receive_value",
+        "expected",
+    ),
+    [
+        (
+            "ducats",
+            "9",
+            "assassin",
+            "V",
+            "assassin",
+            "V",
+            "ducats",
+            "9",
+            "Intercambio completado con Naples: has dado una ficha de asesinato "
+            "contra Venice y has recibido 9 ducados.",
+        ),
+        (
+            "ducats",
+            "9",
+            "ducats",
+            "4",
+            "ducats",
+            "4",
+            "ducats",
+            "9",
+            "Intercambio completado con Naples: has dado 4 ducados y has recibido "
+            "9 ducados.",
+        ),
+        (
+            "assassin",
+            "V",
+            "assassin",
+            "M",
+            "assassin",
+            "M",
+            "assassin",
+            "V",
+            "Intercambio completado con Naples: has dado una ficha de asesinato "
+            "contra Milan y has recibido una ficha de asesinato contra Venice.",
+        ),
+    ],
+)
+def test_exchange_resources_executes_exact_inverse_for_all_resource_pairs(
+    old_give_type: str,
+    old_give_value: str,
+    old_receive_type: str,
+    old_receive_value: str,
+    new_give_type: str,
+    new_give_value: str,
+    new_receive_type: str,
+    new_receive_value: str,
+    expected: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    conn, service = make_trade_service(channel_id=7200)
+    try:
+        game = service.get_game(7200)
+        game.players[1].ass_counters = ["V", "M"]
+        if old_receive_type == "ducats":
+            game.players[1].ducats = 20
+        service.repo.save(game)
+
+        assert service.exchange_resources(
+            7200,
+            1,
+            give_to="L",
+            give_type=old_give_type,
+            give_value=old_give_value,
+            receive_type=old_receive_type,
+            receive_value=old_receive_value,
+        ).startswith("Intercambio propuesto")
+
+        with (
+            patch.object(service.repo, "save", wraps=service.repo.save) as save,
+            caplog.at_level(logging.INFO, logger="machiavelli.services.game_service"),
+        ):
+            result = service.exchange_resources(
+                7200,
+                2,
+                give_to="N",
+                give_type=new_give_type,
+                give_value=new_give_value,
+                receive_type=new_receive_type,
+                receive_value=new_receive_value,
+            )
+
+        assert result == expected
+        save.assert_called_once()
+        record = next(
+            record
+            for record in caplog.records
+            if getattr(record, "operation", None) == "exchange_completed"
+        )
+        assert {
+            key: getattr(record, key)
+            for key in ("game_id", "operation", "power_a", "power_b")
+        } == {
+            "game_id": 1,
+            "operation": "exchange_completed",
+            "power_a": "L",
+            "power_b": "N",
+        }
+        assert record.getMessage() == "Operación privada de trading"
+        for private_field in (
+            "discord_id",
+            "amount",
+            "value",
+            "give_value",
+            "resource",
+            "target",
+            "assassin_target",
+        ):
+            assert not hasattr(record, private_field)
+        loaded = service.get_game(7200)
+        assert loaded.pending_exchanges == []
+        assert loaded.turn_events == []
+        if old_give_type == "ducats" and old_receive_type == "assassin":
+            assert (loaded.players[0].ducats, loaded.players[1].ducats) == (11, 9)
+            assert loaded.players[0].ass_counters == ["V", "V"]
+            assert loaded.players[1].ass_counters == ["M"]
+        elif old_give_type == "ducats":
+            assert (loaded.players[0].ducats, loaded.players[1].ducats) == (15, 25)
+        else:
+            assert (loaded.players[0].ducats, loaded.players[1].ducats) == (20, 0)
+            assert loaded.players[0].ass_counters == ["M"]
+            assert loaded.players[1].ass_counters == ["V", "V"]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("give_value", "receive_value"),
+    [("0", "also-invalid"), ("also-invalid", "0")],
+)
+def test_exchange_cancellation_precedes_resource_parsing(
+    give_value: str, receive_value: str
+) -> None:
+    conn, service = make_trade_service(channel_id=7201)
+    try:
+        service.exchange_resources(
+            7201,
+            1,
+            give_to="L",
+            give_type="ducats",
+            give_value="9",
+            receive_type="assassin",
+            receive_value="V",
+        )
+
+        with (
+            patch("machiavelli.services.game_service.parse_trade_resource") as parse,
+            patch.object(service, "_cancel_pending_exchange") as cancel,
+        ):
+            cancel.return_value = "cancelled"
+            result = service.exchange_resources(
+                7201,
+                1,
+                give_to="L",
+                give_type="not-a-resource",
+                give_value=give_value,
+                receive_type="not-a-resource",
+                receive_value=receive_value,
+            )
+
+        parse.assert_not_called()
+        cancel.assert_called_once()
+
+        assert result == "cancelled"
+
+        with (
+            patch("machiavelli.services.game_service.parse_trade_resource") as parse,
+            patch.object(service, "_cancel_pending_exchange") as cancel,
+            pytest.raises(
+                TradeRuleException,
+                match=(
+                    "^La facción de destino no está asignada a otro jugador de "
+                    "esta partida\\.$"
+                ),
+            ),
+        ):
+            service.exchange_resources(
+                7201,
+                1,
+                give_to="ZZ",
+                give_type="not-a-resource",
+                give_value="0",
+                receive_type="not-a-resource",
+                receive_value="0",
+            )
+
+        parse.assert_not_called()
+        cancel.assert_not_called()
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("non_cancellation_value", ["00", "+0", " 0 "])
+def test_exchange_nonzero_sentinels_parse_as_invalid_ducats_and_keep_proposal(
+    non_cancellation_value: str,
+) -> None:
+    conn, service = make_trade_service(channel_id=7206)
+    try:
+        service.exchange_resources(
+            7206,
+            1,
+            give_to="L",
+            give_type="ducats",
+            give_value="9",
+            receive_type="assassin",
+            receive_value="V",
+        )
+        before = service.get_game(7206).pending_exchanges.copy()
+
+        with pytest.raises(
+            TradeRuleException,
+            match=("^La cantidad de ducados debe ser un entero mayor que cero\\.$"),
+        ):
+            service.exchange_resources(
+                7206,
+                1,
+                give_to="L",
+                give_type="ducats",
+                give_value=non_cancellation_value,
+                receive_type="ducats",
+                receive_value="1",
+            )
+
+        assert service.get_game(7206).pending_exchanges == before
+    finally:
+        conn.close()
+
+
+def test_exchange_cancellation_ignores_disabled_assassin_value() -> None:
+    conn, service = make_trade_service(channel_id=7208)
+    try:
+        service.exchange_resources(
+            7208,
+            1,
+            give_to="L",
+            give_type="ducats",
+            give_value="9",
+            receive_type="assassin",
+            receive_value="V",
+        )
+        scenario = service.get_game(7208).require_scenario()
+        scenario.rules.assassinations_active = False
+
+        with patch(
+            "machiavelli.services.game_service.Scenario.load_scenarios",
+            return_value={"Be": scenario},
+        ):
+            result = service.exchange_resources(
+                7208,
+                1,
+                give_to="L",
+                give_type="assassin",
+                give_value="V",
+                receive_type="ducats",
+                receive_value="0",
+            )
+
+        assert result == "Intercambio pendiente con Florence cancelado."
+        assert service.get_game(7208).pending_exchanges == []
+    finally:
+        conn.close()
+
+
+def test_exchange_resources_delegates_non_inverse_replacement() -> None:
+    conn, service = make_trade_service(channel_id=7207)
+    try:
+        service.exchange_resources(
+            7207,
+            1,
+            give_to="L",
+            give_type="ducats",
+            give_value="9",
+            receive_type="assassin",
+            receive_value="V",
+        )
+
+        with patch.object(
+            service, "_store_pending_exchange", return_value="stored"
+        ) as store:
+            result = service.exchange_resources(
+                7207,
+                1,
+                give_to="L",
+                give_type="ducats",
+                give_value="3",
+                receive_type="ducats",
+                receive_value="4",
+            )
+
+        assert result == "stored"
+        store.assert_called_once()
+        proposal = store.call_args.args[2]
+        assert proposal == ExchangeProposal(
+            "N", "L", TradeResource("ducats", 3), TradeResource("ducats", 4)
+        )
+        assert store.call_args.args[3] == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("discord_id", "expected"),
+    [
+        (
+            1,
+            "Naples ya no dispone de 9 ducados para completar el intercambio.",
+        ),
+        (
+            2,
+            "Florence ya no dispone de una ficha de asesinato contra Venice para "
+            "completar el intercambio.",
+        ),
+    ],
+)
+def test_exchange_inverse_rechecks_both_current_offers(
+    discord_id: int, expected: str
+) -> None:
+    conn, service = make_trade_service(channel_id=7202 + discord_id)
+    try:
+        channel_id = 7202 + discord_id
+        service.exchange_resources(
+            channel_id,
+            1,
+            give_to="L",
+            give_type="ducats",
+            give_value="9",
+            receive_type="assassin",
+            receive_value="V",
+        )
+        game = service.get_game(channel_id)
+        if discord_id == 1:
+            game.players[0].ducats = 0
+        else:
+            game.players[1].ass_counters = []
+        service.repo.save(game)
+        before = service.get_game(channel_id)
+        before_state = [
+            (player.ducats, player.ass_counters[:]) for player in before.players
+        ]
+
+        with patch.object(service, "get_game", return_value=before):
+            with pytest.raises(TradeRuleException, match=f"^{expected}$"):
+                service.exchange_resources(
+                    channel_id,
+                    2,
+                    give_to="N",
+                    give_type="assassin",
+                    give_value="V",
+                    receive_type="ducats",
+                    receive_value="9",
+                )
+
+        assert before.pending_exchanges == [make_proposal()]
+        assert [
+            (player.ducats, player.ass_counters) for player in before.players
+        ] == before_state
+        restored = service.get_game(channel_id)
+        assert restored.pending_exchanges == [make_proposal()]
+        assert [
+            (player.ducats, player.ass_counters) for player in restored.players
+        ] == before_state
+    finally:
+        conn.close()
+
+
+def test_exchange_save_failure_preserves_reloaded_state() -> None:
+    conn, service = make_trade_service(channel_id=7205)
+    try:
+        service.exchange_resources(
+            7205,
+            1,
+            give_to="L",
+            give_type="ducats",
+            give_value="9",
+            receive_type="assassin",
+            receive_value="V",
+        )
+        game = service.get_game(7205)
+        game.players[1].ass_counters = ["V"]
+        service.repo.save(game)
+        before = service.get_game(7205)
+        before_state = [
+            (player.ducats, player.ass_counters[:]) for player in before.players
+        ]
+        conn.execute(
+            """
+            CREATE TRIGGER fail_exchange_execution
+            BEFORE UPDATE ON players
+            BEGIN SELECT RAISE(ABORT, 'forced exchange execution failure'); END
+            """
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            service.exchange_resources(
+                7205,
+                2,
+                give_to="N",
+                give_type="assassin",
+                give_value="V",
+                receive_type="ducats",
+                receive_value="9",
+            )
+
+        restored = service.get_game(7205)
+        assert restored.pending_exchanges == [make_proposal()]
+        assert [
+            (player.ducats, player.ass_counters) for player in restored.players
+        ] == before_state
+    finally:
+        conn.close()
+
+
+def test_exchange_waits_for_a_concurrent_give_to_commit_first() -> None:
+    conn, service = make_trade_service(channel_id=7206)
+    try:
+        service_two = GameService(service.repo)
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_loaded = threading.Event()
+        original_resolve = service._resolve_trade_parties
+        original_get = service_two.get_game
+        results: list[str] = []
+
+        def block_first(game: Game, discord_id: int, give_to: str):
+            first_entered.set()
+            if not release_first.wait(timeout=2):
+                raise AssertionError("first give was not released")
+            return original_resolve(game, discord_id, give_to)
+
+        def observe_second_load(channel_id: int) -> Game:
+            second_loaded.set()
+            return original_get(channel_id)
+
+        with (
+            patch.object(service, "_resolve_trade_parties", side_effect=block_first),
+            patch.object(service_two, "get_game", side_effect=observe_second_load),
+        ):
+            first = threading.Thread(
+                target=lambda: results.append(
+                    service.give_resource(
+                        7206,
+                        1,
+                        give_to="L",
+                        give_type="ducats",
+                        give_value="1",
+                    )
+                )
+            )
+            second = threading.Thread(
+                target=lambda: results.append(
+                    service_two.exchange_resources(
+                        7206,
+                        1,
+                        give_to="L",
+                        give_type="ducats",
+                        give_value="3",
+                        receive_type="ducats",
+                        receive_value="4",
+                    )
+                )
+            )
+            first.start()
+            assert first_entered.wait(timeout=2)
+            second.start()
+            assert not second_loaded.wait(timeout=0.1)
+            release_first.set()
+            first.join(timeout=2)
+            second.join(timeout=2)
+
+        assert results == [
+            "Has dado 1 ducado a Florence.",
+            "Intercambio propuesto a Florence: das 3 ducados y pides 4 ducados.",
+        ]
+        loaded = service.get_game(7206)
+        assert (loaded.players[0].ducats, loaded.players[1].ducats) == (19, 1)
+        assert loaded.pending_exchanges == [
+            ExchangeProposal(
+                "N", "L", TradeResource("ducats", 3), TradeResource("ducats", 4)
+            )
+        ]
+    finally:
+        release_first.set() if "release_first" in locals() else None
+        conn.close()

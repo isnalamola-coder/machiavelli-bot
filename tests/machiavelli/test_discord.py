@@ -20,6 +20,7 @@ from machiavelli.discord import (
     _add_player_record,
     _chunk_lines,
     _create_game_record,
+    _exchange_resources_record,
     _execute_game_turn,
     _get_player_commands,
     _get_status_report,
@@ -34,12 +35,15 @@ from machiavelli.discord import (
     add_player,
     admin_group,
     cmd,
+    exchange,
     expense,
     game_group,
     game_report,
     game_status,
     give,
     run_game,
+    trade_exchange_give_value_autocomplete,
+    trade_exchange_receive_value_autocomplete,
     trade_give_to_autocomplete,
     trade_give_type_autocomplete,
     trade_give_value_autocomplete,
@@ -668,6 +672,7 @@ class TestImportSafety(unittest.TestCase):
         self.assertEqual(game_group.name, "mach")
         self.assertEqual(admin_group.name, "shar")
         self.assertIn("cmd", {command.name for command in game_group.commands})
+        self.assertIn("exchange", {command.name for command in game_group.commands})
         self.assertIn("run_game", {command.name for command in admin_group.commands})
 
 
@@ -881,6 +886,278 @@ class TestGiveCommand(unittest.IsolatedAsyncioTestCase):
                 disabled_types = await trade_give_type_autocomplete(interaction, "")
 
             self.assertEqual({choice.value for choice in disabled_types}, {"ducats"})
+
+
+class TestExchangeCommand(unittest.IsolatedAsyncioTestCase):
+    """Verify the complete private exchange Discord boundary."""
+
+    def test_metadata_and_signature(self) -> None:
+        self.assertEqual(
+            list(signature(exchange.callback).parameters),
+            [
+                "interaction",
+                "give_to",
+                "give_type",
+                "give_value",
+                "receive_type",
+                "receive_value",
+            ],
+        )
+        self.assertEqual(
+            [
+                parameter.annotation
+                for parameter in list(signature(exchange.callback).parameters.values())[
+                    1:
+                ]
+            ],
+            [str] * 5,
+        )
+        self.assertEqual(
+            exchange.description,
+            "Propón, cancela o completa un intercambio con otra facción.",
+        )
+        parameters = {parameter.name: parameter for parameter in exchange.parameters}
+        self.assertEqual(
+            parameters["give_to"].description,
+            "Facción con la que quieres intercambiar",
+        )
+        self.assertEqual(parameters["give_type"].description, "Recurso que ofreces")
+        self.assertEqual(
+            parameters["give_value"].description,
+            "Cantidad u objetivo que ofreces; 0 cancela",
+        )
+        self.assertEqual(
+            parameters["receive_type"].description, "Recurso que solicitas"
+        )
+        self.assertEqual(
+            parameters["receive_value"].description,
+            "Cantidad u objetivo que solicitas; 0 cancela",
+        )
+        autocomplete = {
+            name: parameter.autocomplete for name, parameter in exchange._params.items()
+        }
+        self.assertIs(autocomplete["give_to"], trade_give_to_autocomplete)
+        self.assertIs(autocomplete["give_type"], trade_give_type_autocomplete)
+        self.assertIs(
+            autocomplete["give_value"], trade_exchange_give_value_autocomplete
+        )
+        self.assertIs(autocomplete["receive_type"], trade_give_type_autocomplete)
+        self.assertIs(
+            autocomplete["receive_value"], trade_exchange_receive_value_autocomplete
+        )
+
+    async def test_callback_defers_and_uses_one_private_worker(self) -> None:
+        interaction = make_interaction()
+
+        async def worker(*_args: object) -> str:
+            interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+            return "done"
+
+        with patch(
+            "machiavelli.discord.asyncio.to_thread",
+            new=AsyncMock(side_effect=worker),
+        ) as worker:
+            await exchange.callback(
+                interaction,
+                "L",
+                "ducats",
+                "9",
+                "assassin",
+                "V",
+            )
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        worker.assert_awaited_once_with(
+            _exchange_resources_record,
+            game_group.db_path,
+            interaction.channel_id,
+            interaction.user.id,
+            "L",
+            "ducats",
+            "9",
+            "assassin",
+            "V",
+        )
+        interaction.followup.send.assert_awaited_once_with("done", ephemeral=True)
+
+    async def test_callback_maps_expected_and_unexpected_errors(self) -> None:
+        cases = [
+            (
+                GameNotFoundException(),
+                "**Error:** No hay ninguna partida activa en este canal.",
+            ),
+            (
+                PlayerNotFoundException(),
+                "**Error:** No se identificó al jugador o no tiene una facción "
+                "asignada.",
+            ),
+            (TradeRuleException("recurso inválido"), "**Error:** recurso inválido"),
+        ]
+
+        for failure, expected in cases:
+            interaction = make_interaction()
+            with patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new=AsyncMock(side_effect=failure),
+            ):
+                await exchange.callback(
+                    interaction,
+                    "L",
+                    "ducats",
+                    "9",
+                    "assassin",
+                    "V",
+                )
+            interaction.followup.send.assert_awaited_once_with(expected, ephemeral=True)
+
+        interaction = make_interaction()
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            patch("machiavelli.discord.logger.exception") as log,
+        ):
+            await exchange.callback(
+                interaction,
+                "L",
+                "ducats",
+                "9",
+                "assassin",
+                "V",
+            )
+
+        log.assert_called_once_with(
+            "Fallo inesperado en /mach exchange",
+            extra={"operation": "exchange", "channel_id": interaction.channel_id},
+        )
+        interaction.followup.send.assert_awaited_once_with(
+            "**Error inesperado:** No se pudo completar la operación. "
+            "Inténtalo de nuevo.",
+            ephemeral=True,
+        )
+        message = interaction.followup.send.await_args.args[0]
+        for forbidden in (
+            "RuntimeError",
+            "boom",
+            "Traceback",
+            "SQL",
+            "discord.py",
+            "test_discord.py",
+            "line ",
+            "9",
+            "V",
+            str(interaction.user.id),
+        ):
+            self.assertNotIn(forbidden, message)
+
+    async def test_exchange_value_autocompletes_cancel_without_ducat_io(self) -> None:
+        interaction = make_interaction()
+        interaction.namespace.give_type = "ducats"
+
+        with patch("machiavelli.discord.asyncio.to_thread", new=AsyncMock()) as worker:
+            choices = await trade_exchange_give_value_autocomplete(
+                interaction, "cancel"
+            )
+
+        self.assertEqual(
+            [(choice.name, choice.value) for choice in choices],
+            [("0 — Cancelar intercambio", "0")],
+        )
+        worker.assert_not_awaited()
+
+        interaction.namespace.receive_type = "unknown"
+        with patch("machiavelli.discord.asyncio.to_thread", new=AsyncMock()) as worker:
+            choices = await trade_exchange_receive_value_autocomplete(interaction, "0")
+
+        self.assertEqual([choice.value for choice in choices], ["0"])
+        worker.assert_not_awaited()
+
+        interaction.namespace.give_type = "ASSASSIN"
+        with patch("machiavelli.discord.asyncio.to_thread", new=AsyncMock()) as worker:
+            choices = await trade_exchange_give_value_autocomplete(interaction, "0")
+
+        self.assertEqual([choice.value for choice in choices], ["0"])
+        worker.assert_not_awaited()
+
+    async def test_exchange_value_autocomplete_loads_assassin_targets_once(
+        self,
+    ) -> None:
+        interaction = make_interaction()
+        interaction.namespace.give_type = "assassin"
+        targets = (("M", "Milan"), ("V", "Venice"))
+
+        with patch(
+            "machiavelli.discord.asyncio.to_thread",
+            new=AsyncMock(return_value=targets),
+        ) as worker:
+            choices = await trade_exchange_give_value_autocomplete(interaction, "")
+
+        self.assertEqual(
+            [(choice.name, choice.value) for choice in choices],
+            [
+                ("0 — Cancelar intercambio", "0"),
+                ("Milan", "M"),
+                ("Venice", "V"),
+            ],
+        )
+        worker.assert_awaited_once_with(
+            _get_trade_assassin_targets,
+            game_group.db_path,
+            interaction.channel_id,
+        )
+
+        many_targets = tuple((f"P{index}", f"Power {index}") for index in range(30))
+        with patch(
+            "machiavelli.discord.asyncio.to_thread",
+            new=AsyncMock(return_value=many_targets),
+        ) as worker:
+            choices = await trade_exchange_give_value_autocomplete(interaction, "")
+
+        self.assertEqual(len(choices), 25)
+        self.assertEqual(
+            (choices[0].name, choices[0].value),
+            ("0 — Cancelar intercambio", "0"),
+        )
+        worker.assert_awaited_once_with(
+            _get_trade_assassin_targets,
+            game_group.db_path,
+            interaction.channel_id,
+        )
+
+        interaction.namespace.receive_type = "assassin"
+        with patch(
+            "machiavelli.discord.asyncio.to_thread",
+            new=AsyncMock(return_value=targets),
+        ) as worker:
+            choices = await trade_exchange_receive_value_autocomplete(
+                interaction, "VEN"
+            )
+
+        self.assertEqual([choice.value for choice in choices], ["V"])
+        worker.assert_awaited_once_with(
+            _get_trade_assassin_targets,
+            game_group.db_path,
+            interaction.channel_id,
+        )
+
+    async def test_exchange_value_autocomplete_hides_unexpected_errors(self) -> None:
+        for autocomplete, resource_attribute in (
+            (trade_exchange_give_value_autocomplete, "give_type"),
+            (trade_exchange_receive_value_autocomplete, "receive_type"),
+        ):
+            with self.subTest(autocomplete=autocomplete.__name__):
+                interaction = make_interaction()
+                setattr(interaction.namespace, resource_attribute, "assassin")
+                with patch(
+                    "machiavelli.discord.asyncio.to_thread",
+                    new=AsyncMock(side_effect=RuntimeError("boom")),
+                ):
+                    choices = await autocomplete(interaction, "")
+
+                self.assertEqual(choices, [])
+                interaction.response.send_message.assert_not_awaited()
+                interaction.followup.send.assert_not_awaited()
 
 
 if __name__ == "__main__":

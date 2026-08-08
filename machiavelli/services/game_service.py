@@ -517,6 +517,91 @@ class GameService:
                 return f"Has dado a {counterparty} {resource_text}."
             return f"Has dado {resource_text} a {counterparty}."
 
+    def exchange_resources(
+        self,
+        channel_id: int,
+        discord_id: int,
+        *,
+        give_to: str,
+        give_type: str,
+        give_value: str,
+        receive_type: str,
+        receive_value: str,
+    ) -> str:
+        """Create, cancel, replace, or execute one exchange proposal."""
+        with _trade_mutation_lock:
+            game = self.get_game(channel_id)
+            actor, actor_power, _counterparty, counterparty_power = (
+                self._resolve_trade_parties(game, discord_id, give_to)
+            )
+            if give_value == "0" or receive_value == "0":
+                return self._cancel_pending_exchange(
+                    game, actor_power, counterparty_power
+                )
+
+            scenario = game.require_scenario()
+            give = parse_trade_resource(scenario, give_type, give_value)
+            receive = parse_trade_resource(scenario, receive_type, receive_value)
+            new = ExchangeProposal(actor_power, counterparty_power, give, receive)
+            existing_index = find_exchange_proposal_index(
+                game.pending_exchanges, new.pair_key
+            )
+            if existing_index is None:
+                return self._store_pending_exchange(game, actor, new, None)
+
+            old = game.pending_exchanges[existing_index]
+            if not old.is_exact_inverse(new):
+                return self._store_pending_exchange(game, actor, new, existing_index)
+
+            old_proposer = next(
+                (
+                    player
+                    for player in game.players
+                    if player.power == old.proposer_power
+                ),
+                None,
+            )
+            if old_proposer is None:
+                raise TradeRuleException(
+                    "La facción de destino no está asignada a otro jugador de esta "
+                    "partida."
+                )
+            if not player_has_trade_resource(old_proposer, old.give):
+                proposer_name = GameTables.powers[old.proposer_power]
+                raise TradeRuleException(
+                    f"{proposer_name} ya no dispone de "
+                    f"{self._trade_resource_text(old.give)} para completar el "
+                    "intercambio."
+                )
+            if not player_has_trade_resource(actor, new.give):
+                actor_name = GameTables.powers[actor_power]
+                raise TradeRuleException(
+                    f"{actor_name} ya no dispone de "
+                    f"{self._trade_resource_text(new.give)} para completar el "
+                    "intercambio."
+                )
+
+            transfer_trade_resource(old_proposer, actor, old.give)
+            transfer_trade_resource(actor, old_proposer, new.give)
+            game.pending_exchanges.pop(existing_index)
+            self.repo.save(game)
+            power_a, power_b = new.pair_key
+            logger.info(
+                "Operación privada de trading",
+                extra={
+                    "game_id": game.database_id,
+                    "operation": "exchange_completed",
+                    "power_a": power_a,
+                    "power_b": power_b,
+                },
+            )
+            counterparty = GameTables.powers[counterparty_power]
+            return (
+                f"Intercambio completado con {counterparty}: has dado "
+                f"{self._trade_resource_text(new.give)} y has recibido "
+                f"{self._trade_resource_text(new.receive)}."
+            )
+
     def _cancel_pending_exchange(
         self,
         game: Game,
