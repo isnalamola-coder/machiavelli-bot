@@ -7,8 +7,11 @@ import sqlite3
 import threading
 from contextlib import closing
 from inspect import signature
+from itertools import combinations
+from os import getenv
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter
 from unittest.mock import Mock, patch
 
 import pytest
@@ -28,6 +31,7 @@ from machiavelli.game import Player as PublicPlayer
 from machiavelli.game.command import Command
 from machiavelli.game.game import Game
 from machiavelli.game.player import Player
+from machiavelli.game.scenario import Power, Rules, Scenario, VictoryConditions
 from machiavelli.game.trading import ExchangeProposal, TradeResource
 from machiavelli.repositories.game_repository import GameRepository
 from machiavelli.services import GameService, game_service_session
@@ -1465,3 +1469,132 @@ def test_exchange_waits_for_a_concurrent_give_to_commit_first() -> None:
     finally:
         release_first.set() if "release_first" in locals() else None
         conn.close()
+
+
+@pytest.mark.skipif(
+    getenv("MACHIAVELLI_REFERENCE_PERF") != "1",
+    reason="reference performance gate",
+)
+def test_trade_operations_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    perf_power_codes = ("M", "V", "L", "N", "P", "F", "T")
+    perf_scenario = Scenario(
+        name="Performance 7",
+        year=1454,
+        victory_conditions=VictoryConditions(cities=15, home_countries=2),
+        rules=Rules(assassinations_active=True),
+        powers={code: Power() for code in perf_power_codes},
+    )
+    monkeypatch.setattr(
+        Scenario,
+        "load_scenarios",
+        classmethod(lambda cls, json_path=None: {"Perf7": perf_scenario}),
+    )
+
+    elapsed: dict[str, float] = {}
+    cases = (
+        (
+            "direct_give",
+            False,
+            None,
+            lambda service: service.give_resource(
+                7300,
+                9003,
+                give_to="L",
+                give_type="ducats",
+                give_value="1",
+            ),
+        ),
+        (
+            "proposal_create",
+            True,
+            None,
+            lambda service: service.exchange_resources(
+                7301,
+                9003,
+                give_to="L",
+                give_type="ducats",
+                give_value="3",
+                receive_type="ducats",
+                receive_value="4",
+            ),
+        ),
+        (
+            "replacement",
+            True,
+            ExchangeProposal(
+                "L", "N", TradeResource("ducats", 1), TradeResource("ducats", 2)
+            ),
+            lambda service: service.exchange_resources(
+                7302,
+                9003,
+                give_to="L",
+                give_type="ducats",
+                give_value="3",
+                receive_type="ducats",
+                receive_value="4",
+            ),
+        ),
+        (
+            "cancellation",
+            False,
+            None,
+            lambda service: service.exchange_resources(
+                7303,
+                9003,
+                give_to="L",
+                give_type="ducats",
+                give_value="0",
+                receive_type="ducats",
+                receive_value="1",
+            ),
+        ),
+        (
+            "exact_inverse",
+            True,
+            ExchangeProposal(
+                "L", "N", TradeResource("ducats", 9), TradeResource("assassin", "V")
+            ),
+            lambda service: service.exchange_resources(
+                7304,
+                9003,
+                give_to="L",
+                give_type="assassin",
+                give_value="V",
+                receive_type="ducats",
+                receive_value="9",
+            ),
+        ),
+    )
+
+    for index, (operation, skip_measured_pair, special, call) in enumerate(cases):
+        channel_id = 7300 + index
+        with closing(sqlite3.connect(":memory:")) as conn:
+            service = make_service(conn)
+            game = service.create_game(operation, channel_id, "Perf7")
+            for player_index, code in enumerate(perf_power_codes):
+                player = game.add_player(
+                    player_id=f"perf-{code}", discord_id=9000 + player_index
+                )
+                player.power = code
+                player.ducats = 10_000
+                player.ass_counters = list(perf_power_codes)
+
+            game.pending_exchanges = [
+                ExchangeProposal(
+                    power_a,
+                    power_b,
+                    TradeResource("ducats", 1),
+                    TradeResource("ducats", 1),
+                )
+                for power_a, power_b in combinations(perf_power_codes, 2)
+                if not (skip_measured_pair and power_a == "L" and power_b == "N")
+            ]
+            if special is not None:
+                game.pending_exchanges.append(special)
+            service.repo.save(game)
+
+            started = perf_counter()
+            call(service)
+            elapsed[operation] = perf_counter() - started
+
+    assert all(duration < 0.5 for duration in elapsed.values())
