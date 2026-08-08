@@ -270,6 +270,71 @@ def test_advance_turn_clears_pending_exchanges_after_player_commands():
     assert game.turn_events == []
 
 
+def test_pending_exchange_persistence_does_not_change_game_events():
+    with closing(sqlite3.connect(":memory:")) as conn:
+        database.upgrade_connection(conn)
+        game = Game("Eventos y propuestas", scenario_id="Be")
+        game.add_player("P1")
+        game.add_event(TurnEvent(EventType.PLAYER_ELIMINATED, {"player": "P1"}))
+        repository = GameRepository(conn)
+        repository.save(game)
+        conn.commit()
+
+        game_id = game.database_id
+        assert game_id is not None
+        event_rows_before = conn.execute(
+            """
+            SELECT event_type, data_json
+            FROM game_events
+            WHERE game_id = ?
+            ORDER BY id ASC
+            """,
+            (game_id,),
+        ).fetchall()
+
+        loaded = repository.get_by_id(game_id)
+        loaded.pending_exchanges = [
+            ExchangeProposal(
+                "M",
+                "V",
+                TradeResource("ducats", 987654),
+                TradeResource("assassin", "N"),
+            )
+        ]
+        repository.save(loaded)
+        conn.commit()
+
+        event_rows_after_proposal = conn.execute(
+            """
+            SELECT event_type, data_json
+            FROM game_events
+            WHERE game_id = ?
+            ORDER BY id ASC
+            """,
+            (game_id,),
+        ).fetchall()
+
+        loaded = repository.get_by_id(game_id)
+        loaded.advance_turn()
+        repository.save(loaded)
+        conn.commit()
+
+        event_rows_after_expiry = conn.execute(
+            """
+            SELECT event_type, data_json
+            FROM game_events
+            WHERE game_id = ?
+            ORDER BY id ASC
+            """,
+            (game_id,),
+        ).fetchall()
+
+        assert len(event_rows_after_proposal) == len(event_rows_before)
+        assert event_rows_after_proposal == event_rows_before
+        assert len(event_rows_after_expiry) == len(event_rows_before)
+        assert event_rows_after_expiry == event_rows_before
+
+
 # database on Player
 def test_load_players_delegates_to_repository():
     """La fachada histórica debe usar el repositorio canónico."""
