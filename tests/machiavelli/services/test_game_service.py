@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
+import threading
 from contextlib import closing
 from inspect import signature
 from pathlib import Path
@@ -16,7 +18,11 @@ from machiavelli.engine import GameEngine
 from machiavelli.engine.military import DislodgementResolverRequired
 from machiavelli.events import InvalidTurnEventError
 from machiavelli.game import Command as PublicCommand
-from machiavelli.game import DuplicatePlayerException, PlayerNotFoundException
+from machiavelli.game import (
+    DuplicatePlayerException,
+    PlayerNotFoundException,
+    TradeRuleException,
+)
 from machiavelli.game import Game as PublicGame
 from machiavelli.game import Player as PublicPlayer
 from machiavelli.game.command import Command
@@ -29,6 +35,23 @@ from machiavelli.services import GameService, game_service_session
 def make_service(conn: sqlite3.Connection) -> GameService:
     database.upgrade_connection(conn)
     return GameService(GameRepository(conn))
+
+
+def make_trade_service(
+    channel_id: int = 7100,
+) -> tuple[sqlite3.Connection, GameService]:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    service = make_service(conn)
+    service.create_game("Trading", channel_id, "Be")
+    service.add_player(channel_id, 1, "P1")
+    service.add_player(channel_id, 2, "P2")
+    game = service.get_game(channel_id)
+    game.players[0].power = "N"
+    game.players[0].ducats = 20
+    game.players[0].ass_counters = ["V"]
+    game.players[1].power = "L"
+    service.repo.save(game)
+    return conn, service
 
 
 def test_game_service_session_builds_once_and_closes_on_success() -> None:
@@ -348,3 +371,265 @@ def test_run_turn_persists_and_can_continue_after_reopening_connection() -> None
             )
             assert restored.scenario is not None
             assert restored.map is not None
+
+
+def test_give_resource_persists_ducats_and_saves_once() -> None:
+    conn, service = make_trade_service()
+    try:
+        with patch.object(service.repo, "save", wraps=service.repo.save) as save:
+            result = service.give_resource(
+                7100,
+                1,
+                give_to="L",
+                give_type="ducats",
+                give_value="9",
+            )
+
+        assert result == "Has dado 9 ducados a Florence."
+        save.assert_called_once()
+        loaded = service.get_game(7100)
+        assert loaded.players[0].ducats == 11
+        assert loaded.players[1].ducats == 9
+        assert loaded.turn_events == []
+    finally:
+        conn.close()
+
+
+def test_give_resource_transfers_one_assassin_counter() -> None:
+    conn, service = make_trade_service()
+    try:
+        result = service.give_resource(
+            7100,
+            1,
+            give_to="L",
+            give_type="assassin",
+            give_value="V",
+        )
+
+        assert result == "Has dado a Florence una ficha de asesinato contra Venice."
+        loaded = service.get_game(7100)
+        assert loaded.players[0].ass_counters == []
+        assert loaded.players[1].ass_counters == ["V"]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("turn_number", [1, 2])
+def test_give_resource_has_no_phase_gate(turn_number: int) -> None:
+    conn, service = make_trade_service(channel_id=7101 + turn_number)
+    try:
+        game = service.get_game(7101 + turn_number)
+        game.turn_number = turn_number
+        service.repo.save(game)
+        assert (
+            service.give_resource(
+                7101 + turn_number,
+                1,
+                give_to="L",
+                give_type="ducats",
+                give_value="1",
+            )
+            == "Has dado 1 ducado a Florence."
+        )
+    finally:
+        conn.close()
+
+
+def test_give_resource_save_failure_is_rolled_back_after_reload() -> None:
+    conn, service = make_trade_service(channel_id=7104)
+    try:
+        before = [
+            (player.ducats, player.ass_counters)
+            for player in service.get_game(7104).players
+        ]
+        conn.execute(
+            """
+            CREATE TRIGGER fail_trade_save
+            BEFORE UPDATE ON players
+            BEGIN
+                SELECT RAISE(ABORT, 'forced trade save failure');
+            END
+            """
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            service.give_resource(
+                7104,
+                1,
+                give_to="L",
+                give_type="ducats",
+                give_value="9",
+            )
+
+        reloaded = service.get_game(7104)
+        assert [
+            (player.ducats, player.ass_counters) for player in reloaded.players
+        ] == before
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("give_to", "give_type", "give_value", "message"),
+    [
+        (
+            "N",
+            "ducats",
+            "1",
+            "La facción de destino no está asignada a otro jugador de esta partida.",
+        ),
+        (
+            "P2",
+            "ducats",
+            "1",
+            "La facción de destino no está asignada a otro jugador de esta partida.",
+        ),
+        (
+            "L",
+            "ducats",
+            "0",
+            "La cantidad de ducados debe ser un entero mayor que cero.",
+        ),
+        (
+            "L",
+            "assassin",
+            "M",
+            "No tienes una ficha de asesinato contra Milan.",
+        ),
+    ],
+)
+def test_give_resource_invalid_requests_do_not_save(
+    give_to: str, give_type: str, give_value: str, message: str
+) -> None:
+    conn, service = make_trade_service(channel_id=7105)
+    try:
+        with patch.object(service.repo, "save") as save:
+            with pytest.raises(TradeRuleException, match=f"^{message}$"):
+                service.give_resource(
+                    7105,
+                    1,
+                    give_to=give_to,
+                    give_type=give_type,
+                    give_value=give_value,
+                )
+        save.assert_not_called()
+    finally:
+        conn.close()
+
+
+def test_give_resource_requires_assigned_actor_power() -> None:
+    conn, service = make_trade_service(channel_id=7106)
+    try:
+        game = service.get_game(7106)
+        game.players[0].power = None
+        service.repo.save(game)
+
+        with pytest.raises(
+            PlayerNotFoundException,
+            match="^Tu cuenta no tiene una facción asignada en esta partida\\.$",
+        ):
+            service.give_resource(
+                7106,
+                1,
+                give_to="L",
+                give_type="ducats",
+                give_value="1",
+            )
+    finally:
+        conn.close()
+
+
+def test_give_resource_logs_only_private_pair_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    conn, service = make_trade_service(channel_id=7107)
+    try:
+        with caplog.at_level(logging.INFO, logger="machiavelli.services.game_service"):
+            service.give_resource(
+                7107,
+                1,
+                give_to="L",
+                give_type="assassin",
+                give_value="V",
+            )
+
+        record = next(
+            record
+            for record in caplog.records
+            if getattr(record, "operation", None) == "trade_give"
+        )
+        assert record.game_id == service.get_game(7107).database_id
+        assert record.power_a == "L"
+        assert record.power_b == "N"
+        assert "V" not in record.getMessage()
+        assert "654" not in record.getMessage()
+    finally:
+        conn.close()
+
+
+def test_concurrent_gives_load_sequentially_before_second_operation() -> None:
+    conn, service = make_trade_service(channel_id=7108)
+    try:
+        service_two = GameService(service.repo)
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_loaded = threading.Event()
+        first_resolve = service._resolve_trade_parties
+        second_get = service_two.get_game
+
+        def block_first(game: Game, discord_id: int, give_to: str):
+            first_entered.set()
+            if not release_first.wait(timeout=2):
+                raise AssertionError("first give was not released")
+            return first_resolve(game, discord_id, give_to)
+
+        def observe_second_load(channel_id: int) -> Game:
+            second_loaded.set()
+            return second_get(channel_id)
+
+        results: list[str] = []
+
+        with (
+            patch.object(service, "_resolve_trade_parties", side_effect=block_first),
+            patch.object(service_two, "get_game", side_effect=observe_second_load),
+        ):
+            first = threading.Thread(
+                target=lambda: results.append(
+                    service.give_resource(
+                        7108,
+                        1,
+                        give_to="L",
+                        give_type="ducats",
+                        give_value="1",
+                    )
+                )
+            )
+            second = threading.Thread(
+                target=lambda: results.append(
+                    service_two.give_resource(
+                        7108,
+                        1,
+                        give_to="L",
+                        give_type="ducats",
+                        give_value="1",
+                    )
+                )
+            )
+            first.start()
+            assert first_entered.wait(timeout=2)
+            second.start()
+            assert not second_loaded.wait(timeout=0.1)
+            release_first.set()
+            first.join(timeout=2)
+            second.join(timeout=2)
+
+        assert sorted(results) == [
+            "Has dado 1 ducado a Florence.",
+            "Has dado 1 ducado a Florence.",
+        ]
+        loaded = service.get_game(7108)
+        assert loaded.players[0].ducats == 18
+        assert loaded.players[1].ducats == 2
+    finally:
+        release_first.set() if "release_first" in locals() else None
+        conn.close()

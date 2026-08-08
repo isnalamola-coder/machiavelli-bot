@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from machiavelli.db.database import DatabaseManager
@@ -15,16 +17,28 @@ from machiavelli.game import (
     GameNotFoundException,
     Player,
     PlayerNotFoundException,
+    TradeRuleException,
     TurnType,
 )
 from machiavelli.game.map import Map
 from machiavelli.game.scenario import Scenario
+from machiavelli.game.tables import GameTables
+from machiavelli.game.trading import (
+    TradeResource,
+    parse_trade_resource,
+    transfer_trade_resource,
+)
 from machiavelli.repositories.game_repository import GameRepository
 
 from .turn_reporter import TurnReporter
 
 type PlayerInfo = tuple[str, int | None]
 type ActorOption = tuple[str, str]
+
+logger = logging.getLogger(__name__)
+
+_trade_mutation_lock = Lock()
+# ponytail: lock global por instancia; usar locks por partida solo si la contención medida lo exige  # noqa: E501
 type GameStatusDict = dict[str, Any]
 
 
@@ -420,3 +434,128 @@ class GameService:
             for player in self.get_game(channel_id).players
             if player.power is not None
         ]
+
+    def _resolve_trade_parties(
+        self,
+        game: Game,
+        discord_id: int,
+        give_to: str,
+    ) -> tuple[Player, str, Player, str]:
+        """Resolve the assigned actor and another assigned power."""
+        actor = self.resolve_player(game, discord_id)
+        actor_power = actor.power
+        if actor_power is None:
+            raise PlayerNotFoundException(
+                "Tu cuenta no tiene una facción asignada en esta partida."
+            )
+
+        target = give_to.casefold()
+        counterparty = next(
+            (
+                player
+                for player in game.players
+                if player is not actor
+                and player.power is not None
+                and player.power.casefold() == target
+            ),
+            None,
+        )
+        if counterparty is None or counterparty.power is None:
+            raise TradeRuleException(
+                "La facción de destino no está asignada a otro jugador de esta partida."
+            )
+        return actor, actor_power, counterparty, counterparty.power
+
+    @staticmethod
+    def _trade_resource_text(resource: TradeResource) -> str:
+        """Format one resource for a private service response."""
+        if resource.kind == "ducats":
+            assert isinstance(resource.value, int)
+            unit = "ducado" if resource.value == 1 else "ducados"
+            return f"{resource.value} {unit}"
+        assert isinstance(resource.value, str)
+        return f"una ficha de asesinato contra {GameTables.powers[resource.value]}"
+
+    def give_resource(
+        self,
+        channel_id: int,
+        discord_id: int,
+        *,
+        give_to: str,
+        give_type: str,
+        give_value: str,
+    ) -> str:
+        """Transfer one resource directly between two assigned powers."""
+        with _trade_mutation_lock:
+            game = self.get_game(channel_id)
+            actor, actor_power, receiver, receiver_power = self._resolve_trade_parties(
+                game, discord_id, give_to
+            )
+            resource = parse_trade_resource(
+                game.require_scenario(), give_type, give_value
+            )
+            transfer_trade_resource(actor, receiver, resource)
+            self.repo.save(game)
+
+            power_a, power_b = sorted((actor_power, receiver_power))
+            logger.info(
+                "Operación privada de trading",
+                extra={
+                    "game_id": game.database_id,
+                    "operation": "trade_give",
+                    "power_a": power_a,
+                    "power_b": power_b,
+                },
+            )
+
+            resource_text = self._trade_resource_text(resource)
+            counterparty = GameTables.powers[receiver_power]
+            if resource.kind == "assassin":
+                return f"Has dado a {counterparty} {resource_text}."
+            return f"Has dado {resource_text} a {counterparty}."
+
+    def get_trade_counterparties(
+        self,
+        channel_id: int,
+        discord_id: int,
+    ) -> list[ActorOption]:
+        """Return assigned powers other than the requesting actor."""
+        try:
+            game = self.get_game(channel_id)
+            actor = self.resolve_player(game, discord_id)
+            if actor.power is None:
+                return []
+            return [
+                (player.power, GameTables.powers[player.power])
+                for player in game.players
+                if player is not actor and player.power is not None
+            ]
+        except (GameNotFoundException, PlayerNotFoundException):
+            return []
+
+    def get_trade_resource_types(self, channel_id: int) -> list[ActorOption]:
+        """Return resource types enabled by the active scenario."""
+        try:
+            scenario = self.get_game(channel_id).require_scenario()
+            types: list[ActorOption] = [("ducats", "Ducados")]
+            if scenario.rules.assassinations_active:
+                types.append(("assassin", "Ficha de asesinato"))
+            return types
+        except (GameNotFoundException, PlayerNotFoundException):
+            return []
+
+    def get_trade_assassin_targets(
+        self,
+        channel_id: int,
+    ) -> list[ActorOption]:
+        """Return every scenario power as a possible assassin target."""
+        try:
+            scenario = self.get_game(channel_id).require_scenario()
+            if not scenario.rules.assassinations_active:
+                return []
+            return [
+                (power_code, GameTables.powers[power_code])
+                for power_code in scenario.powers
+            ]
+        except (GameNotFoundException, PlayerNotFoundException):
+            return []

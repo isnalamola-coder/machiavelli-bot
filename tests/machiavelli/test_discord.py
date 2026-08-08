@@ -23,7 +23,11 @@ from machiavelli.discord import (
     _execute_game_turn,
     _get_player_commands,
     _get_status_report,
+    _get_trade_assassin_targets,
+    _get_trade_counterparties,
+    _get_trade_resource_types,
     _get_turn_report,
+    _give_resource_record,
     _set_scenario_record,
     _submit_command_record,
     _submit_expense_record,
@@ -34,7 +38,11 @@ from machiavelli.discord import (
     game_group,
     game_report,
     game_status,
+    give,
     run_game,
+    trade_give_to_autocomplete,
+    trade_give_type_autocomplete,
+    trade_give_value_autocomplete,
 )
 from machiavelli.engine.exceptions import TooManyExpenses
 from machiavelli.engine.military import (
@@ -49,6 +57,7 @@ from machiavelli.game import (
     DuplicatePlayerException,
     GameNotFoundException,
     PlayerNotFoundException,
+    TradeRuleException,
 )
 from machiavelli.services import game_service_session
 
@@ -659,6 +668,165 @@ class TestImportSafety(unittest.TestCase):
         self.assertEqual(admin_group.name, "shar")
         self.assertIn("cmd", {command.name for command in game_group.commands})
         self.assertIn("run_game", {command.name for command in admin_group.commands})
+
+
+class TestGiveCommand(unittest.IsolatedAsyncioTestCase):
+    """Verify the private direct-transfer Discord boundary."""
+
+    def test_metadata_and_signature(self) -> None:
+        self.assertEqual(
+            list(signature(give.callback).parameters),
+            ["interaction", "give_to", "give_type", "give_value"],
+        )
+        self.assertEqual(
+            give.description,
+            "Da ducados o una ficha de asesinato a otra facción.",
+        )
+        parameters = {parameter.name: parameter for parameter in give.parameters}
+        self.assertEqual(
+            parameters["give_to"].description, "Facción que recibirá el recurso"
+        )
+        self.assertEqual(parameters["give_type"].description, "Recurso que quieres dar")
+        self.assertEqual(
+            parameters["give_value"].description,
+            "Cantidad de ducados o facción objetivo de la ficha",
+        )
+
+    async def test_callback_defers_and_uses_one_private_worker(self) -> None:
+        interaction = make_interaction()
+
+        with patch(
+            "machiavelli.discord.asyncio.to_thread",
+            new=AsyncMock(return_value="done"),
+        ) as worker:
+            await give.callback(interaction, "L", "ducats", "9")
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        worker.assert_awaited_once_with(
+            _give_resource_record,
+            game_group.db_path,
+            interaction.channel_id,
+            interaction.user.id,
+            "L",
+            "ducats",
+            "9",
+        )
+        interaction.followup.send.assert_awaited_once_with("done", ephemeral=True)
+
+    async def test_callback_maps_expected_errors_to_ephemeral_messages(self) -> None:
+        cases = [
+            (
+                GameNotFoundException(),
+                "**Error:** No hay ninguna partida activa en este canal.",
+            ),
+            (
+                PlayerNotFoundException(),
+                "**Error:** No se identificó al jugador o no tiene una facción "
+                "asignada.",
+            ),
+            (
+                TradeRuleException("recurso inválido"),
+                "**Error:** recurso inválido",
+            ),
+        ]
+
+        for failure, expected in cases:
+            interaction = make_interaction()
+            with patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new=AsyncMock(side_effect=failure),
+            ):
+                await give.callback(interaction, "L", "ducats", "9")
+
+            interaction.followup.send.assert_awaited_once_with(
+                expected,
+                ephemeral=True,
+            )
+
+    async def test_callback_logs_unexpected_error_without_leaking_details(self) -> None:
+        interaction = make_interaction()
+
+        with (
+            patch(
+                "machiavelli.discord.asyncio.to_thread",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            patch("machiavelli.discord.logger.exception") as log,
+        ):
+            await give.callback(interaction, "L", "ducats", "9")
+
+        log.assert_called_once_with(
+            "Fallo inesperado en /mach give",
+            extra={"operation": "trade_give", "channel_id": interaction.channel_id},
+        )
+        interaction.followup.send.assert_awaited_once_with(
+            "**Error inesperado:** No se pudo completar la operación. "
+            "Inténtalo de nuevo.",
+            ephemeral=True,
+        )
+
+    async def test_trade_give_autocompletes_filter_and_cap_results(self) -> None:
+        interaction = make_interaction()
+        counterparties = tuple((f"P{index}", f"Power {index}") for index in range(30))
+
+        with patch(
+            "machiavelli.discord.asyncio.to_thread",
+            new=AsyncMock(return_value=counterparties),
+        ) as worker:
+            choices = await trade_give_to_autocomplete(interaction, "power")
+
+        self.assertEqual(len(choices), 25)
+        self.assertEqual(choices[0].value, "P0")
+        worker.assert_awaited_once_with(
+            _get_trade_counterparties,
+            game_group.db_path,
+            interaction.channel_id,
+            interaction.user.id,
+        )
+
+    async def test_trade_give_type_autocomplete_uses_one_worker(self) -> None:
+        interaction = make_interaction()
+
+        with patch(
+            "machiavelli.discord.asyncio.to_thread",
+            new=AsyncMock(return_value=(("ducats", "Ducados"),)),
+        ) as worker:
+            choices = await trade_give_type_autocomplete(interaction, "DUC")
+
+        self.assertEqual(
+            [(choice.value, choice.name) for choice in choices], [("ducats", "Ducados")]
+        )
+        worker.assert_awaited_once_with(
+            _get_trade_resource_types,
+            game_group.db_path,
+            interaction.channel_id,
+        )
+
+    async def test_trade_give_value_autocomplete_only_loads_assassin_targets(
+        self,
+    ) -> None:
+        interaction = make_interaction()
+        interaction.namespace.give_type = "ducats"
+        with patch("machiavelli.discord.asyncio.to_thread", new=AsyncMock()) as worker:
+            self.assertEqual(await trade_give_value_autocomplete(interaction, ""), [])
+        worker.assert_not_awaited()
+
+        interaction.namespace.give_type = "assassin"
+        targets = (("M", "Milan"), ("V", "Venice"))
+        with patch(
+            "machiavelli.discord.asyncio.to_thread",
+            new=AsyncMock(return_value=targets),
+        ) as worker:
+            choices = await trade_give_value_autocomplete(interaction, "ven")
+
+        self.assertEqual(
+            [(choice.value, choice.name) for choice in choices], [("V", "Venice")]
+        )
+        worker.assert_awaited_once_with(
+            _get_trade_assassin_targets,
+            game_group.db_path,
+            interaction.channel_id,
+        )
 
 
 if __name__ == "__main__":
